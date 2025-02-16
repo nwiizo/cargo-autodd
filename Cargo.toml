@@ -1,0 +1,20 @@
+[package]
+name = "cargo-autodd"
+version = "0.1.0"
+edition = "2021"
+description = "Automatically update dependencies in Cargo.toml"
+license = "MIT"
+repository = "https://github.com/nwiizo/cargo-autodd"
+documentation = "https://github.com/nwiizo/cargo-autodd"
+homepage = "https://github.com/nwiizo/cargo-autodd"
+authors = ["syu.m.5151@gmail.com"]
+
+[dependencies]
+anyhow = "1.0"
+regex = "1.0"
+semver = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml_edit = "0.22"
+ureq = { version = "2.8", features = ["json"] }
+walkdir = "2.4"
