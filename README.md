@@ -6,6 +6,8 @@ A tool that automatically manages Rust dependencies by analyzing your source cod
 
 cargo-autodd simplifies Rust dependency management by automatically adding required crates to your Cargo.toml based on `use` statements and `extern crate` declarations in your code. 
 
+![cargo-autodd demo](.github/cargo-autodd_01.gif)
+
 ## ✨ Features
 
 - 🔎 Scans Rust source files for imports
