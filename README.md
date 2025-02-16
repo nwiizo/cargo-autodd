@@ -53,4 +53,4 @@ MIT
 
 ## 👤 Author
 
-nwiizo (@nwiizo)
+nwiizo ([@nwiizo](https://x.com/nwiizo))
