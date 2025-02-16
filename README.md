@@ -31,8 +31,10 @@ cargo install cargo-autodd
 In your Rust project directory:
 
 ```bash
-cargo run
+cargo autodd
 ```
+
+
 
 ## 🔄 How It Works
 
