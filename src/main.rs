@@ -47,7 +47,7 @@ impl DependencyManager {
         let use_regex = Regex::new(r"use\s+([a-zA-Z_][a-zA-Z0-9_]*)(::|\s|;)")?;
         let extern_regex = Regex::new(r"extern\s+crate\s+([a-zA-Z_][a-zA-Z0-9_]*)")?;
 
-        // rust-analyzer CLIを使用してプロジェクトを解析
+        // Use rust-analyzer CLI to analyze the project
         let output = Command::new("rust-analyzer")
             .arg("analysis")
             .arg("--workspace")
@@ -59,7 +59,7 @@ impl DependencyManager {
             println!("Warning: rust-analyzer analysis returned non-zero status. Falling back to regex-based analysis.");
         }
 
-        // プロジェクト内のすべてのRustファイルを走査
+        // Walk through all Rust files in the project
         for dir_entry in walkdir::WalkDir::new(&self.project_root)
             .into_iter()
             .filter_entry(|e| !is_hidden(e.path()))
@@ -72,7 +72,7 @@ impl DependencyManager {
             let content = fs::read_to_string(dir_entry.path())?;
             let file_path = dir_entry.path().to_path_buf();
 
-            // use文を解析
+            // analyze use statements
             for cap in use_regex.captures_iter(&content) {
                 let crate_name = cap[1].to_string();
                 if !is_std_crate(&crate_name) {
@@ -88,7 +88,7 @@ impl DependencyManager {
                 }
             }
 
-            // extern crate文を解析
+            // analyze extern crate statements
             for cap in extern_regex.captures_iter(&content) {
                 let crate_name = cap[1].to_string();
                 if !is_std_crate(&crate_name) {
@@ -112,7 +112,7 @@ impl DependencyManager {
         let content = fs::read_to_string(&self.cargo_toml)?;
         let mut doc = content.parse::<DocumentMut>()?;
 
-        // 現在の依存関係を取得
+        // Get current dependencies
         let mut current_deps = HashSet::new();
         if let Some(Item::Table(deps)) = doc.get("dependencies") {
             for (key, _) in deps.iter() {
@@ -120,14 +120,14 @@ impl DependencyManager {
             }
         }
 
-        // 新しい依存関係を追加
+        // Add new dependencies
         for (name, crate_ref) in crate_refs {
             if !current_deps.contains(name) && !is_std_crate(name) {
                 self.add_dependency(&mut doc, crate_ref)?;
             }
         }
 
-        // 未使用の依存関係を削除
+        // Remove unused dependencies
         let used_crates: HashSet<_> = crate_refs.keys().cloned().collect();
         let unused_deps: Vec<_> = current_deps
             .difference(&used_crates)
@@ -140,7 +140,7 @@ impl DependencyManager {
             println!("Removing unused dependency: {}", name);
         }
 
-        // Cargo.tomlを更新
+        // Update Cargo.toml
         fs::write(&self.cargo_toml, doc.to_string())?;
 
         Ok(())
@@ -157,7 +157,7 @@ impl DependencyManager {
         let mut dep_table = Table::new();
         dep_table.insert("version", toml_edit::value(version));
 
-        // フィーチャーフラグがある場合は追加
+        // If there is a feature flag, add it
         if !crate_ref.features.is_empty() {
             let mut array = toml_edit::Array::new();
             for feature in &crate_ref.features {
@@ -191,7 +191,7 @@ impl DependencyManager {
         let reader = BufReader::new(response.into_reader());
         let response: CratesIoResponse = serde_json::from_reader(reader)?;
 
-        // 最新の非yankedバージョンを取得
+        // Return the highest version that is not yanked.
         let latest_version = response
             .versions
             .iter()
