@@ -1,34 +1,32 @@
-# cargo-autodd
+# 📦 cargo-autodd
 
 A tool that automatically manages Rust dependencies by analyzing your source code and updating Cargo.toml
 
-## Overview
+## 🔍 Overview
 
 cargo-autodd simplifies Rust dependency management by automatically adding required crates to your Cargo.toml based on `use` statements and `extern crate` declarations in your code. 
 
-## Features
+## ✨ Features
 
-- Scans Rust source files for imports
-- Automatically detects required dependencies
-- Updates Cargo.toml with the latest stable versions
-- Removes unused dependencies
-- Leverages rust-analyzer for better code analysis (when available)
+- 🔎 Scans Rust source files for imports
+- 🤖 Automatically detects required dependencies
+- ⬆️ Updates Cargo.toml with the latest stable versions
+- 🗑️ Removes unused dependencies
+- 🛠️ Leverages rust-analyzer for better code analysis (when available)
 
-## Installation
+## 📥 Installation
 
 ```bash
-git clone https://github.com/nwiizo/cargo-autodd
-cd cargo-autodd
-cargo install --path .
+cargo install cargo-autodd
 ```
 
-## Requirements
+## ⚙️ Requirements
 
-- Rust 1.70.0 or later
-- Cargo
-- rust-analyzer (optional, but recommended)
+- 🦀 Rust 1.70.0 or later
+- 📦 Cargo
+- 🔧 rust-analyzer (optional, but recommended)
 
-## Usage
+## 🚀 Usage
 
 In your Rust project directory:
 
@@ -36,21 +34,21 @@ In your Rust project directory:
 cargo run
 ```
 
-## How It Works
+## 🔄 How It Works
 
-1. Analyzes your Rust source files
-2. Detects import statements and external crate declarations
-3. Updates Cargo.toml with required dependencies
-4. Verifies changes with `cargo check`
+1. 📝 Analyzes your Rust source files
+2. 🔍 Detects import statements and external crate declarations
+3. ⚡ Updates Cargo.toml with required dependencies
+4. ✅ Verifies changes with `cargo check`
 
-## Contributing
+## 👥 Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
 
-## License
+## 📜 License
 
 MIT
 
-## Author
+## 👤 Author
 
 nwiizo (@nwiizo)
