@@ -8,7 +8,7 @@ use regex::Regex;
 use walkdir::WalkDir;
 
 use crate::models::CrateReference;
-use crate::utils::{is_hidden, is_std_crate};
+use crate::utils::is_std_crate;
 
 pub struct DependencyAnalyzer {
     project_root: PathBuf,
@@ -62,13 +62,15 @@ impl DependencyAnalyzer {
                 let file_path = path.to_path_buf();
 
                 self.analyze_file(
-                    &content,
-                    &file_path,
-                    &use_regex,
-                    &extern_regex,
-                    &nested_regex,
-                    &item_regex,
-                    &mut crate_refs,
+                    FileAnalysisContext {
+                        content: &content,
+                        file_path: &file_path,
+                        use_regex: &use_regex,
+                        extern_regex: &extern_regex,
+                        nested_regex: &nested_regex,
+                        item_regex: &item_regex,
+                        crate_refs: &mut crate_refs,
+                    },
                 )?;
             }
         }
@@ -87,19 +89,20 @@ impl DependencyAnalyzer {
         Ok(crate_refs)
     }
 
-    fn analyze_file(
-        &self,
-        content: &str,
-        file_path: &PathBuf,
-        use_regex: &Regex,
-        extern_regex: &Regex,
-        nested_regex: &Regex,
-        item_regex: &Regex,
-        crate_refs: &mut HashMap<String, CrateReference>,
-    ) -> Result<()> {
+    fn analyze_file(&self, ctx: FileAnalysisContext) -> Result<()> {
         if self.debug {
-            println!("Analyzing file: {:?}", file_path);
+            println!("Analyzing file: {:?}", ctx.file_path);
         }
+
+        let FileAnalysisContext {
+            content,
+            file_path,
+            use_regex,
+            extern_regex,
+            nested_regex,
+            item_regex,
+            crate_refs,
+        } = ctx;
 
         for line in content.lines() {
             let line = line.trim();
@@ -204,6 +207,16 @@ impl DependencyAnalyzer {
     }
 }
 
+struct FileAnalysisContext<'a> {
+    content: &'a str,
+    file_path: &'a PathBuf,
+    use_regex: &'a Regex,
+    extern_regex: &'a Regex,
+    nested_regex: &'a Regex,
+    item_regex: &'a Regex,
+    crate_refs: &'a mut HashMap<String, CrateReference>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -255,7 +268,7 @@ mod tests {
             println!("- {} (used in {} files)", name, crate_ref.usage_count());
             println!("  Used in:");
             for path in &crate_ref.used_in {
-                if let Some(relative) = path.strip_prefix(&temp_dir.path()).ok() {
+                if let Ok(relative) = path.strip_prefix(temp_dir.path()) {
                     println!("    - {}", relative.display());
                 }
             }
@@ -308,13 +321,15 @@ mod tests {
         let mut crate_refs = HashMap::new();
 
         analyzer.analyze_file(
-            content,
-            &file_path,
-            &use_regex,
-            &extern_regex,
-            &nested_regex,
-            &item_regex,
-            &mut crate_refs,
+            FileAnalysisContext {
+                content,
+                file_path: &file_path,
+                use_regex: &use_regex,
+                extern_regex: &extern_regex,
+                nested_regex: &nested_regex,
+                item_regex: &item_regex,
+                crate_refs: &mut crate_refs,
+            },
         )?;
 
         println!("\nAnalysis complete. Found crates:");

@@ -1,7 +1,6 @@
 use anyhow::Result;
 use cargo_autodd::CargoAutodd;
 use std::env;
-use std::path::PathBuf;
 
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();

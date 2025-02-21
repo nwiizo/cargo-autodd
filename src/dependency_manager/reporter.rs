@@ -45,8 +45,8 @@ impl DependencyReporter {
 
                     if let Ok(latest) = self.updater.get_latest_version(name) {
                         if let (Ok(current), Ok(latest_ver)) = (
-                            Version::parse(&version.trim_start_matches('^')),
-                            Version::parse(&latest.trim_start_matches('^')),
+                            Version::parse(version.trim_start_matches('^')),
+                            Version::parse(latest.trim_start_matches('^')),
                         ) {
                             if latest_ver > current {
                                 println!("  Update available: {} -> {}", version, latest);
@@ -59,7 +59,7 @@ impl DependencyReporter {
                     println!("  Used in {} file(s)", crate_ref.usage_count());
                     println!("  Usage locations:");
                     for path in &crate_ref.used_in {
-                        if let Some(relative) = path.strip_prefix(&self.project_root).ok() {
+                        if let Ok(relative) = path.strip_prefix(&self.project_root) {
                             println!("    - {}", relative.display());
                         }
                     }
@@ -109,9 +109,9 @@ impl DependencyReporter {
             for (name, dep) in deps.iter() {
                 if let Some(version) = self.updater.get_dependency_version(dep) {
                     if let Ok(latest) = self.updater.get_latest_version(name) {
-                        let current = Version::parse(&version.trim_start_matches('^'))
+                        let current = Version::parse(version.trim_start_matches('^'))
                             .unwrap_or_else(|_| Version::new(0, 0, 0));
-                        let latest = Version::parse(&latest.trim_start_matches('^'))
+                        let latest = Version::parse(latest.trim_start_matches('^'))
                             .unwrap_or_else(|_| Version::new(0, 0, 0));
 
                         if latest > current {
@@ -123,6 +123,16 @@ impl DependencyReporter {
         }
 
         Ok(outdated)
+    }
+
+    pub fn check_version(&self, version: &str, latest: &str) -> Result<bool> {
+        Ok(match (
+            Version::parse(version.trim_start_matches('^')),
+            Version::parse(latest.trim_start_matches('^')),
+        ) {
+            (Ok(current), Ok(latest_ver)) => latest_ver > current,
+            _ => false,
+        })
     }
 }
 
