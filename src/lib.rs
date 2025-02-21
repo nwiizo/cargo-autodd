@@ -25,7 +25,10 @@ impl CargoAutodd {
 
     pub fn with_debug(project_root: PathBuf, debug: bool) -> Self {
         Self {
-            analyzer: dependency_manager::DependencyAnalyzer::with_debug(project_root.clone(), debug),
+            analyzer: dependency_manager::DependencyAnalyzer::with_debug(
+                project_root.clone(),
+                debug,
+            ),
             updater: dependency_manager::DependencyUpdater::new(project_root.clone()),
             reporter: dependency_manager::DependencyReporter::new(project_root),
             debug,
@@ -38,13 +41,13 @@ impl CargoAutodd {
         }
         println!("🔍 Analyzing project dependencies...");
         let crate_refs = self.analyzer.analyze_dependencies()?;
-        
+
         if self.debug {
             println!("\n📝 Updating Cargo.toml with found dependencies...");
         }
         println!("📝 Updating Cargo.toml...");
         self.updater.update_cargo_toml(&crate_refs)?;
-        
+
         println!("✅ Dependencies updated successfully!");
         Ok(())
     }
@@ -80,7 +83,7 @@ mod tests {
 
     fn create_test_environment() -> Result<TempDir> {
         let temp_dir = TempDir::new()?;
-        
+
         // Create Cargo.toml
         let cargo_toml = temp_dir.path().join("Cargo.toml");
         let content = r#"
@@ -131,4 +134,4 @@ use tokio;
         autodd.check_security()?;
         Ok(())
     }
-} 
+}

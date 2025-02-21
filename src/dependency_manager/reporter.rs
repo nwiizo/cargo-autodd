@@ -6,8 +6,8 @@ use anyhow::Result;
 use semver::Version;
 use toml_edit::{DocumentMut, Item};
 
-use crate::models::CrateReference;
 use crate::dependency_manager::updater::DependencyUpdater;
+use crate::models::CrateReference;
 
 pub struct DependencyReporter {
     project_root: PathBuf,
@@ -78,7 +78,7 @@ impl DependencyReporter {
         println!("========================\n");
 
         let outdated = self.check_security()?;
-        
+
         if outdated.is_empty() {
             println!("✅ All dependencies are up to date.");
             return Ok(());
@@ -136,7 +136,7 @@ mod tests {
     fn create_test_environment() -> Result<(TempDir, PathBuf)> {
         let temp_dir = TempDir::new()?;
         let cargo_toml = temp_dir.path().join("Cargo.toml");
-        
+
         let content = r#"
 [package]
 name = "test-package"
@@ -149,7 +149,7 @@ tokio = "1.0"
 "#;
         let mut file = File::create(&cargo_toml)?;
         writeln!(file, "{}", content)?;
-        
+
         Ok((temp_dir, cargo_toml))
     }
 
@@ -157,7 +157,7 @@ tokio = "1.0"
     fn test_generate_dependency_report() -> Result<()> {
         let (temp_dir, _) = create_test_environment()?;
         let reporter = DependencyReporter::new(temp_dir.path().to_path_buf());
-        
+
         let mut crate_refs = HashMap::new();
         let mut serde_ref = CrateReference::new("serde".to_string());
         serde_ref.add_usage(temp_dir.path().join("src/main.rs"));
@@ -174,4 +174,4 @@ tokio = "1.0"
         reporter.generate_security_report()?;
         Ok(())
     }
-} 
+}

@@ -62,4 +62,4 @@ mod tests {
         assert!(!is_essential_dep("custom_crate"));
         assert!(!is_essential_dep("std"));
     }
-} 
+}

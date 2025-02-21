@@ -17,7 +17,7 @@ pub struct DependencyAnalyzer {
 
 impl DependencyAnalyzer {
     pub fn new(project_root: PathBuf) -> Self {
-        Self { 
+        Self {
             project_root,
             debug: false,
         }
@@ -53,7 +53,7 @@ impl DependencyAnalyzer {
         for entry in WalkDir::new(&self.project_root) {
             let entry = entry?;
             let path = entry.path();
-            
+
             if path.extension().map_or(false, |ext| ext == "rs") {
                 if self.debug {
                     println!("Found Rust file: {:?}", path);
@@ -114,10 +114,17 @@ impl DependencyAnalyzer {
             // Handle use statements
             if let Some(cap) = use_regex.captures(line) {
                 let full_path = cap[1].to_string();
-                let base_crate = full_path.split("::").next().unwrap_or(&full_path).to_string();
-                
+                let base_crate = full_path
+                    .split("::")
+                    .next()
+                    .unwrap_or(&full_path)
+                    .to_string();
+
                 if self.debug {
-                    println!("Found use statement: {} -> base crate: {}", full_path, base_crate);
+                    println!(
+                        "Found use statement: {} -> base crate: {}",
+                        full_path, base_crate
+                    );
                 }
 
                 if !is_std_crate(&base_crate) {
@@ -165,7 +172,7 @@ impl DependencyAnalyzer {
                     }
                 }
             }
-            
+
             // Handle extern crate statements
             if let Some(cap) = extern_regex.captures(line) {
                 let crate_name = cap[1].to_string();
@@ -214,7 +221,7 @@ mod tests {
     #[test]
     fn test_analyze_dependencies() -> Result<()> {
         let temp_dir = TempDir::new()?;
-        
+
         // Create test files with various import styles
         let main_rs = create_test_file(
             &temp_dir,
@@ -254,13 +261,29 @@ mod tests {
             }
         }
 
-        assert!(crate_refs.contains_key("serde"), "serde dependency not found");
-        assert!(crate_refs.contains_key("tokio"), "tokio dependency not found");
-        assert!(crate_refs.contains_key("anyhow"), "anyhow dependency not found");
-        assert!(crate_refs.contains_key("regex"), "regex dependency not found");
+        assert!(
+            crate_refs.contains_key("serde"),
+            "serde dependency not found"
+        );
+        assert!(
+            crate_refs.contains_key("tokio"),
+            "tokio dependency not found"
+        );
+        assert!(
+            crate_refs.contains_key("anyhow"),
+            "anyhow dependency not found"
+        );
+        assert!(
+            crate_refs.contains_key("regex"),
+            "regex dependency not found"
+        );
 
         let serde_ref = crate_refs.get("serde").unwrap();
-        assert_eq!(serde_ref.usage_count(), 2, "serde should be used in two files");
+        assert_eq!(
+            serde_ref.usage_count(),
+            2,
+            "serde should be used in two files"
+        );
 
         Ok(())
     }
@@ -299,10 +322,19 @@ mod tests {
             println!("- {} (used in {} files)", name, crate_ref.usage_count());
         }
 
-        assert!(crate_refs.contains_key("serde"), "serde dependency not found");
-        assert!(crate_refs.contains_key("tokio"), "tokio dependency not found");
-        assert!(crate_refs.contains_key("anyhow"), "anyhow dependency not found");
+        assert!(
+            crate_refs.contains_key("serde"),
+            "serde dependency not found"
+        );
+        assert!(
+            crate_refs.contains_key("tokio"),
+            "tokio dependency not found"
+        );
+        assert!(
+            crate_refs.contains_key("anyhow"),
+            "anyhow dependency not found"
+        );
 
         Ok(())
     }
-} 
+}

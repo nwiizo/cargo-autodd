@@ -62,4 +62,4 @@ mod tests {
         crate_ref.add_feature("test_feature".to_string());
         assert!(crate_ref.features.contains("test_feature"));
     }
-} 
+}
