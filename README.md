@@ -69,15 +69,15 @@ cargo autodd security
 
 ### Debug Mode
 
-デバッグモードでは以下の詳細情報が表示されます：
+In debug mode, the following detailed information is displayed:
 
-- 🔍 検出されたRustファイルのパス
-- 📝 処理中の各行の内容
-- 🔎 検出されたuse文と基本クレート名
-- 📦 ネストされたインポートの詳細
-- 🔧 extern crate文の検出
-- 📊 各ファイルの解析結果
-- 📋 最終的なクレート参照の一覧
+- 🔍 Path of detected Rust files
+- 📝 Content of each line being processed
+- 🔎 Detected `use` statements and base crate names
+- 📦 Details of nested imports
+- 🔧 Detection of `extern crate` statements
+- 📊 Analysis results of each file
+- 📋 Final list of crate references
 
 ## 🔄 How It Works
 

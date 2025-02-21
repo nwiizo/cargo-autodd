@@ -8,7 +8,7 @@ use tempfile::TempDir;
 
 fn create_test_project() -> Result<TempDir> {
     let temp_dir = TempDir::new()?;
-    
+
     // Create project structure
     fs::create_dir(temp_dir.path().join("src"))?;
 
@@ -98,4 +98,4 @@ fn test_update_dependencies() -> Result<()> {
     // Update dependencies
     autodd.update_dependencies()?;
     Ok(())
-} 
+}
