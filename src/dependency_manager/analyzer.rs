@@ -54,7 +54,7 @@ impl DependencyAnalyzer {
             let entry = entry?;
             let path = entry.path();
 
-            if path.extension().map_or(false, |ext| ext == "rs") {
+            if path.extension().is_some_and(|ext| ext == "rs") {
                 if self.debug {
                     println!("Found Rust file: {:?}", path);
                 }
