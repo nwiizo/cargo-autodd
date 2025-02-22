@@ -37,7 +37,6 @@ pub fn is_essential_dep(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     #[test]
     fn test_is_hidden() {

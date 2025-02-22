@@ -126,13 +126,15 @@ impl DependencyReporter {
     }
 
     pub fn check_version(&self, version: &str, latest: &str) -> Result<bool> {
-        Ok(match (
-            Version::parse(version.trim_start_matches('^')),
-            Version::parse(latest.trim_start_matches('^')),
-        ) {
-            (Ok(current), Ok(latest_ver)) => latest_ver > current,
-            _ => false,
-        })
+        Ok(
+            match (
+                Version::parse(version.trim_start_matches('^')),
+                Version::parse(latest.trim_start_matches('^')),
+            ) {
+                (Ok(current), Ok(latest_ver)) => latest_ver > current,
+                _ => false,
+            },
+        )
     }
 }
 

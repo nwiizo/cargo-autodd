@@ -61,17 +61,15 @@ impl DependencyAnalyzer {
                 let content = fs::read_to_string(path)?;
                 let file_path = path.to_path_buf();
 
-                self.analyze_file(
-                    FileAnalysisContext {
-                        content: &content,
-                        file_path: &file_path,
-                        use_regex: &use_regex,
-                        extern_regex: &extern_regex,
-                        nested_regex: &nested_regex,
-                        item_regex: &item_regex,
-                        crate_refs: &mut crate_refs,
-                    },
-                )?;
+                self.analyze_file(FileAnalysisContext {
+                    content: &content,
+                    file_path: &file_path,
+                    use_regex: &use_regex,
+                    extern_regex: &extern_regex,
+                    nested_regex: &nested_regex,
+                    item_regex: &item_regex,
+                    crate_refs: &mut crate_refs,
+                })?;
             }
         }
 
@@ -320,17 +318,15 @@ mod tests {
         let item_regex = Regex::new(r"([a-zA-Z_][a-zA-Z0-9_]*)")?;
         let mut crate_refs = HashMap::new();
 
-        analyzer.analyze_file(
-            FileAnalysisContext {
-                content,
-                file_path: &file_path,
-                use_regex: &use_regex,
-                extern_regex: &extern_regex,
-                nested_regex: &nested_regex,
-                item_regex: &item_regex,
-                crate_refs: &mut crate_refs,
-            },
-        )?;
+        analyzer.analyze_file(FileAnalysisContext {
+            content,
+            file_path: &file_path,
+            use_regex: &use_regex,
+            extern_regex: &extern_regex,
+            nested_regex: &nested_regex,
+            item_regex: &item_regex,
+            crate_refs: &mut crate_refs,
+        })?;
 
         println!("\nAnalysis complete. Found crates:");
         for (name, crate_ref) in &crate_refs {
