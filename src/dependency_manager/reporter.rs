@@ -43,14 +43,18 @@ impl DependencyReporter {
                 if let Some(version) = self.updater.get_dependency_version(dep) {
                     println!("  Version: {}", version);
 
-                    if let Ok(latest) = self.updater.get_latest_version(name) {
-                        if let (Ok(current), Ok(latest_ver)) = (
-                            Version::parse(version.trim_start_matches('^')),
-                            Version::parse(latest.trim_start_matches('^')),
-                        ) {
-                            if latest_ver > current {
-                                println!("  Update available: {} -> {}", version, latest);
+                    match self.updater.get_latest_version(name) {
+                        Ok(latest) => {
+                            if let Ok(needs_update) = self.check_version(&version, &latest) {
+                                if needs_update {
+                                    println!("  ⚠️ Update available: {} -> {}", version, latest);
+                                } else {
+                                    println!("  ✅ Up to date");
+                                }
                             }
+                        }
+                        Err(e) => {
+                            println!("  ⚠️ Failed to check latest version: {}", e);
                         }
                     }
                 }
@@ -89,7 +93,6 @@ impl DependencyReporter {
         for (name, version_info) in outdated {
             println!("📦 {}", name);
             println!("  Version update available: {}", version_info);
-            println!("  Please check the changelog for security fixes.");
             println!();
         }
 
@@ -109,12 +112,7 @@ impl DependencyReporter {
             for (name, dep) in deps.iter() {
                 if let Some(version) = self.updater.get_dependency_version(dep) {
                     if let Ok(latest) = self.updater.get_latest_version(name) {
-                        let current = Version::parse(version.trim_start_matches('^'))
-                            .unwrap_or_else(|_| Version::new(0, 0, 0));
-                        let latest = Version::parse(latest.trim_start_matches('^'))
-                            .unwrap_or_else(|_| Version::new(0, 0, 0));
-
-                        if latest > current {
+                        if let Ok(true) = self.check_version(&version, &latest) {
                             outdated.push((name.to_string(), format!("{} -> {}", version, latest)));
                         }
                     }
@@ -126,15 +124,9 @@ impl DependencyReporter {
     }
 
     pub fn check_version(&self, version: &str, latest: &str) -> Result<bool> {
-        Ok(
-            match (
-                Version::parse(version.trim_start_matches('^')),
-                Version::parse(latest.trim_start_matches('^')),
-            ) {
-                (Ok(current), Ok(latest_ver)) => latest_ver > current,
-                _ => false,
-            },
-        )
+        let current = Version::parse(version.trim_start_matches('^'))?;
+        let latest_ver = Version::parse(latest.trim_start_matches('^'))?;
+        Ok(latest_ver > current)
     }
 }
 

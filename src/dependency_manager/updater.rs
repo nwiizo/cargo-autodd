@@ -7,10 +7,13 @@ use std::process::Command;
 use anyhow::{Context, Result};
 use semver::Version;
 use serde::Deserialize;
+use serde_json;
 use toml_edit::{DocumentMut, Item, Table};
+use ureq;
 
 use crate::models::CrateReference;
 use crate::utils::is_essential_dep;
+use crate::utils::is_std_crate;
 
 #[derive(Deserialize)]
 struct CratesIoResponse {
@@ -26,6 +29,7 @@ struct CrateVersion {
 pub struct DependencyUpdater {
     project_root: PathBuf,
     cargo_toml: PathBuf,
+    debug: bool,
 }
 
 impl DependencyUpdater {
@@ -34,6 +38,7 @@ impl DependencyUpdater {
         Self {
             project_root,
             cargo_toml,
+            debug: false,
         }
     }
 
@@ -112,19 +117,45 @@ impl DependencyUpdater {
     }
 
     pub fn get_latest_version(&self, crate_name: &str) -> Result<String> {
+        // Skip standard library types and modules
+        if is_std_crate(crate_name) {
+            return Err(anyhow::anyhow!("Standard library type: {}", crate_name));
+        }
+
         let url = format!("https://crates.io/api/v1/crates/{}/versions", crate_name);
-        let response = ureq::get(&url).call()?;
-        let reader = BufReader::new(response.into_reader());
-        let response: CratesIoResponse = serde_json::from_reader(reader)?;
 
-        let latest_version = response
-            .versions
-            .iter()
-            .find(|v| !v.yanked)
-            .ok_or_else(|| anyhow::anyhow!("No valid version found"))?;
+        match ureq::get(&url).call() {
+            Ok(response) => {
+                let reader = BufReader::new(response.into_reader());
+                let response: CratesIoResponse = serde_json::from_reader(reader)?;
 
-        let version = Version::parse(&latest_version.num)?;
-        Ok(format!("^{}.{}.0", version.major, version.minor))
+                let latest_version =
+                    response
+                        .versions
+                        .iter()
+                        .find(|v| !v.yanked)
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("No non-yanked version found for {}", crate_name)
+                        })?;
+
+                let version = Version::parse(&latest_version.num)?;
+                Ok(format!("^{}.{}.0", version.major, version.minor))
+            }
+            Err(ureq::Error::Status(404, _)) => {
+                if self.debug {
+                    println!("Warning: Crate '{}' not found on crates.io", crate_name);
+                }
+                Err(anyhow::anyhow!(
+                    "Crate '{}' not found on crates.io",
+                    crate_name
+                ))
+            }
+            Err(e) => Err(anyhow::anyhow!(
+                "Failed to fetch version for {}: {}",
+                crate_name,
+                e
+            )),
+        }
     }
 
     pub fn verify_dependencies(&self) -> Result<()> {

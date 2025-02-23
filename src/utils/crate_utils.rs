@@ -6,9 +6,10 @@ pub fn is_hidden(path: &Path) -> bool {
         .any(|c| c.as_os_str().to_string_lossy().starts_with('.'))
 }
 
-/// Checks if a crate name represents a standard library crate
+/// Checks if a crate name represents a standard library crate or type
 pub fn is_std_crate(name: &str) -> bool {
     let std_crates = [
+        // Standard library crates
         "std",
         "core",
         "alloc",
@@ -17,8 +18,29 @@ pub fn is_std_crate(name: &str) -> bool {
         "rand",
         "libc",
         "collections",
+        // Common standard library types that might be mistaken for crates
+        "String",
+        "Vec",
+        "HashMap",
+        "HashSet",
+        "BTreeMap",
+        "BTreeSet",
+        "PathBuf",
+        "Path",
+        "Result",
+        "Option",
+        "Box",
+        "Arc",
+        "Rc",
+        "Cell",
+        "RefCell",
+        "Mutex",
+        "RwLock",
     ];
     std_crates.contains(&name)
+        || name.starts_with("std::")
+        || name.starts_with("core::")
+        || name.starts_with("alloc::")
 }
 
 /// Checks if a dependency is considered essential and should not be removed
