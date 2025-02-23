@@ -1,6 +1,6 @@
 [package]
 name = "cargo-autodd"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 description = "Automatically update dependencies in Cargo.toml"
 license = "MIT"
@@ -8,6 +8,11 @@ repository = "https://github.com/nwiizo/cargo-autodd"
 documentation = "https://github.com/nwiizo/cargo-autodd"
 homepage = "https://github.com/nwiizo/cargo-autodd"
 authors = ["syu.m.5151@gmail.com"]
+
+# cargoのサブコマンドとして実行できるように設定
+[[bin]]
+name = "cargo-autodd"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0"
@@ -18,7 +23,7 @@ serde_json = "1.0"
 toml_edit = "0.22"
 ureq = { version = "2.8", features = ["json"] }
 walkdir = "2.4"
-rustsec = "0.27"
+tokio = "1.43"
 
 [dev-dependencies]
 tempfile = "3.8"
