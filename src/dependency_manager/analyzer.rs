@@ -128,7 +128,10 @@ impl DependencyAnalyzer {
                     );
                 }
 
-                if !is_std_crate(&base_crate) {
+                if !is_std_crate(&base_crate) && 
+                   !base_crate.starts_with("std::") && 
+                   !base_crate.starts_with("core::") && 
+                   !base_crate.starts_with("alloc::") {
                     let crate_ref = crate_refs
                         .entry(base_crate.clone())
                         .or_insert_with(|| CrateReference::new(base_crate.clone()));
@@ -141,28 +144,18 @@ impl DependencyAnalyzer {
 
                 // Handle nested imports
                 if let Some(nested) = nested_regex.captures(line) {
-                    let nested_content = nested[1].to_string();
-                    if self.debug {
-                        println!("Found nested imports: {}", nested_content);
-                    }
-
-                    let nested_items = nested_content.split(',');
-                    for item in nested_items {
-                        let item = item.trim();
-                        if self.debug {
-                            println!("Processing nested item: {}", item);
-                        }
-
-                        if let Some(cap) = item_regex.captures(item) {
-                            let crate_name = cap[1].to_string();
+                    if let Some(items) = nested.get(1) {
+                        for item in item_regex.captures_iter(items.as_str()) {
+                            let item_name = item[1].to_string();
                             if self.debug {
-                                println!("Found nested crate: {}", crate_name);
+                                println!("Processing nested item: {}", item_name);
                             }
 
-                            if !is_std_crate(&crate_name) {
+                            if !is_std_crate(&item_name) && 
+                               !item_name.starts_with("std::") {
                                 let crate_ref = crate_refs
-                                    .entry(crate_name.clone())
-                                    .or_insert_with(|| CrateReference::new(crate_name.clone()));
+                                    .entry(item_name.clone())
+                                    .or_insert_with(|| CrateReference::new(item_name.clone()));
                                 crate_ref.add_usage(file_path.clone());
 
                                 if self.debug {
