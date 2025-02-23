@@ -4,7 +4,7 @@ use std::env;
 
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
-    
+
     // cargo-autodd が cargo autodd として呼び出された場合、
     // 最初の引数は "cargo" で2番目が "autodd" になります
     if args.len() > 1 && args[1] != "autodd" {
