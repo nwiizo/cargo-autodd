@@ -46,18 +46,37 @@ impl DependencyUpdater {
         let content = fs::read_to_string(&self.cargo_toml)?;
         let mut doc = content.parse::<DocumentMut>()?;
 
+        // Check if this is a workspace or a package
+        let is_workspace = doc.get("workspace").is_some();
+
+        // Determine the correct dependencies table (workspace or package)
+        let deps_path = if is_workspace {
+            "workspace.dependencies"
+        } else {
+            "dependencies"
+        };
+
         // Get current dependencies
         let mut current_deps = HashSet::new();
-        if let Some(Item::Table(deps)) = doc.get("dependencies") {
+        if let Some(Item::Table(deps)) = doc.get(deps_path) {
             for (key, _) in deps.iter() {
                 current_deps.insert(key.to_string());
             }
+        } else if is_workspace {
+            // Create workspace.dependencies if it doesn't exist
+            let workspace = doc.entry("workspace").or_insert(Item::Table(Table::new()));
+            if let Item::Table(workspace_table) = workspace {
+                workspace_table.insert("dependencies", Item::Table(Table::new()));
+            }
+        } else {
+            // Create dependencies if it doesn't exist for regular packages
+            doc.insert("dependencies", Item::Table(Table::new()));
         }
 
         // Add new dependencies
         for (name, crate_ref) in crate_refs {
             if !current_deps.contains(name) {
-                self.add_dependency(&mut doc, crate_ref)?;
+                self.add_dependency(&mut doc, crate_ref, deps_path)?;
             }
         }
 
@@ -70,7 +89,7 @@ impl DependencyUpdater {
             .collect();
 
         for name in unused_deps {
-            self.remove_dependency(&mut doc, &name)?;
+            self.remove_dependency(&mut doc, &name, deps_path)?;
             println!("Removing unused dependency: {}", name);
         }
 
@@ -78,13 +97,33 @@ impl DependencyUpdater {
         Ok(())
     }
 
-    fn add_dependency(&self, doc: &mut DocumentMut, crate_ref: &CrateReference) -> Result<()> {
+    fn add_dependency(
+        &self,
+        doc: &mut DocumentMut,
+        crate_ref: &CrateReference,
+        deps_path: &str,
+    ) -> Result<()> {
         let version = self.get_latest_version(&crate_ref.name)?;
 
-        let deps = doc
-            .get_mut("dependencies")
-            .and_then(|v| v.as_table_mut())
-            .ok_or_else(|| anyhow::anyhow!("Could not find dependencies table"))?;
+        // Get or create the dependencies table
+        let deps = if deps_path.contains('.') {
+            // Handle nested table path like "workspace.dependencies"
+            let parts: Vec<&str> = deps_path.split('.').collect();
+            let parent = doc
+                .get_mut(parts[0])
+                .and_then(|v| v.as_table_mut())
+                .ok_or_else(|| anyhow::anyhow!("Could not find {} table", parts[0]))?;
+
+            parent
+                .get_mut(parts[1])
+                .and_then(|v| v.as_table_mut())
+                .ok_or_else(|| anyhow::anyhow!("Could not find {} table", deps_path))?
+        } else {
+            // Direct table like "dependencies"
+            doc.get_mut(deps_path)
+                .and_then(|v| v.as_table_mut())
+                .ok_or_else(|| anyhow::anyhow!("Could not find {} table", deps_path))?
+        };
 
         let mut dep_table = Table::new();
         dep_table.insert("version", toml_edit::value(version));
@@ -109,8 +148,16 @@ impl DependencyUpdater {
         Ok(())
     }
 
-    fn remove_dependency(&self, doc: &mut DocumentMut, name: &str) -> Result<()> {
-        if let Some(Item::Table(deps)) = doc.get_mut("dependencies") {
+    fn remove_dependency(&self, doc: &mut DocumentMut, name: &str, deps_path: &str) -> Result<()> {
+        if deps_path.contains('.') {
+            // Handle nested table path like "workspace.dependencies"
+            let parts: Vec<&str> = deps_path.split('.').collect();
+            if let Some(Item::Table(parent)) = doc.get_mut(parts[0]) {
+                if let Some(Item::Table(deps)) = parent.get_mut(parts[1]) {
+                    deps.remove(name);
+                }
+            }
+        } else if let Some(Item::Table(deps)) = doc.get_mut(deps_path) {
             deps.remove(name);
         }
         Ok(())
@@ -177,6 +224,22 @@ impl DependencyUpdater {
             _ => None,
         }
     }
+
+    // New method to detect if the current Cargo.toml is a workspace
+    pub fn is_workspace(&self) -> Result<bool> {
+        let content = fs::read_to_string(&self.cargo_toml)?;
+        let doc = content.parse::<DocumentMut>()?;
+        Ok(doc.get("workspace").is_some())
+    }
+
+    // New method to get dependencies path
+    pub fn get_dependencies_path(&self) -> Result<String> {
+        if self.is_workspace()? {
+            Ok("workspace.dependencies".to_string())
+        } else {
+            Ok("dependencies".to_string())
+        }
+    }
 }
 
 #[cfg(test)]
@@ -195,6 +258,21 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+serde = "1.0"
+tokio = "1.0"
+"#;
+        let mut file = File::create(&path).unwrap();
+        writeln!(file, "{}", content).unwrap();
+        path
+    }
+
+    fn create_workspace_cargo_toml(dir: &TempDir) -> PathBuf {
+        let path = dir.path().join("Cargo.toml");
+        let content = r#"
+[workspace]
+members = ["crate1", "crate2"]
+
+[workspace.dependencies]
 serde = "1.0"
 tokio = "1.0"
 "#;
@@ -227,6 +305,51 @@ tokio = "1.0"
         assert!(content.contains("regex"));
         assert!(content.contains("serde"));
         assert!(!content.contains("unused-dep"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_workspace_cargo_toml() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        create_workspace_cargo_toml(&temp_dir);
+
+        let updater = DependencyUpdater::new(temp_dir.path().to_path_buf());
+        let mut crate_refs = HashMap::new();
+
+        // Add a new dependency
+        let mut new_crate = CrateReference::new("regex".to_string());
+        new_crate.add_feature("unicode".to_string());
+        crate_refs.insert("regex".to_string(), new_crate);
+
+        // Add an existing dependency
+        let serde_crate = CrateReference::new("serde".to_string());
+        crate_refs.insert("serde".to_string(), serde_crate);
+
+        updater.update_cargo_toml(&crate_refs)?;
+
+        // Verify the changes
+        let content = fs::read_to_string(updater.cargo_toml)?;
+        assert!(content.contains("regex"));
+        assert!(content.contains("serde"));
+        assert!(content.contains("[workspace.dependencies]"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_is_workspace() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+
+        // Test regular package
+        create_cargo_toml(&temp_dir);
+        let updater = DependencyUpdater::new(temp_dir.path().to_path_buf());
+        assert!(!updater.is_workspace()?);
+
+        // Test workspace
+        create_workspace_cargo_toml(&temp_dir);
+        let updater = DependencyUpdater::new(temp_dir.path().to_path_buf());
+        assert!(updater.is_workspace()?);
 
         Ok(())
     }
