@@ -468,6 +468,7 @@ fn main() {
         let use_regex = Regex::new(r"^\s*use\s+([a-zA-Z_][a-zA-Z0-9_]*(?:::[a-zA-Z0-9_]*)*)")?;
         let extern_regex = Regex::new(r"^\s*extern\s+crate\s+([a-zA-Z_][a-zA-Z0-9_]*)")?;
 
+        #[allow(clippy::needless_borrow)]
         analyzer.analyze_file(FileAnalysisContext {
             content: &content,
             file_path: &file_path,
