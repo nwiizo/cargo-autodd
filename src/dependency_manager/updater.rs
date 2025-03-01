@@ -99,25 +99,25 @@ impl DependencyUpdater {
         crate_ref: &CrateReference,
         deps_path: &str,
     ) -> Result<()> {
-        // 内部クレート（path依存）の場合は、crates.ioで検索せずに追加
+        // For internal crates (path dependencies), add without searching on crates.io
         if crate_ref.is_path_dependency {
             if let Some(path) = &crate_ref.path {
                 if self.debug {
                     println!("Adding path dependency: {} with path {}", crate_ref.name, path);
                 }
                 
-                // 依存関係テーブルを取得または作成
+                // Get or create the dependencies table
                 let deps = doc
                     .entry(deps_path)
                     .or_insert(toml_edit::table())
                     .as_table_mut()
                     .ok_or_else(|| anyhow::anyhow!("Failed to get dependencies table"))?;
                 
-                // 内部クレートをpath依存として追加
+                // Add internal crate as path dependency
                 let mut table = Table::new();
                 table["path"] = toml_edit::value(path.clone());
                 
-                // publish設定がある場合は追加
+                // Add publish setting if available
                 if let Some(publish) = crate_ref.publish {
                     table["publish"] = toml_edit::value(publish);
                 }
@@ -127,7 +127,7 @@ impl DependencyUpdater {
             }
         }
         
-        // 通常の依存関係の場合は、crates.ioから最新バージョンを取得
+        // For regular dependencies, get the latest version from crates.io
         let version = match self.get_latest_version(&crate_ref.name) {
             Ok(v) => v,
             Err(e) => {
@@ -181,7 +181,7 @@ impl DependencyUpdater {
                 println!("Checking if {} is an internal crate (normalized: {})", crate_name, normalized_name);
             }
             
-            // Cargo.tomlを読み込んで内部クレートかどうかを確認
+            // Check if it's an internal crate by reading Cargo.toml
             let workspace_root = self.find_workspace_root()?;
             let workspace_cargo_toml = workspace_root.join("Cargo.toml");
             
@@ -197,7 +197,7 @@ impl DependencyUpdater {
             }
         }
         
-        // crates.ioから最新バージョンを取得
+        // Get the latest version from crates.io
         let url = format!("https://crates.io/api/v1/crates/{}", crate_name);
         let response = ureq::get(&url).call();
 
@@ -227,7 +227,7 @@ impl DependencyUpdater {
         }
     }
     
-    /// ワークスペースのルートディレクトリを見つける
+    /// Find the workspace root directory
     fn find_workspace_root(&self) -> Result<PathBuf> {
         let mut current_dir = self.project_root.clone();
         
@@ -241,7 +241,7 @@ impl DependencyUpdater {
             }
             
             if !current_dir.pop() {
-                // ルートディレクトリに到達した場合は現在のプロジェクトルートを返す
+                // If we've reached the root directory, return the current project root
                 return Ok(self.project_root.clone());
             }
         }

@@ -5,8 +5,8 @@ use std::env;
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
 
-    // cargo-autodd が cargo autodd として呼び出された場合、
-    // 最初の引数は "cargo" で2番目が "autodd" になります
+    // When cargo-autodd is called as 'cargo autodd',
+    // the first argument is "cargo" and the second is "autodd"
     if args.len() > 1 && args[1] != "autodd" {
         println!("This command should be run as 'cargo autodd'");
         std::process::exit(1);

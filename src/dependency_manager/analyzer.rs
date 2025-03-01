@@ -93,7 +93,7 @@ impl DependencyAnalyzer {
         Ok(crate_refs)
     }
 
-    /// Cargo.tomlから既存の依存関係情報を読み込む
+    /// Load existing dependency information from Cargo.toml
     fn load_existing_dependencies(&self, crate_refs: &mut HashMap<String, CrateReference>) -> Result<()> {
         let cargo_toml_path = self.project_root.join("Cargo.toml");
         if !cargo_toml_path.exists() {
@@ -109,7 +109,7 @@ impl DependencyAnalyzer {
         let doc = content.parse::<DocumentMut>()
             .with_context(|| format!("Failed to parse Cargo.toml at {:?}", cargo_toml_path))?;
 
-        // パッケージの公開設定を確認
+        // Check package publish settings
         let publish = if let Some(package) = doc.get("package") {
             if let Some(publish_value) = package.get("publish") {
                 match publish_value.as_bool() {
@@ -127,7 +127,7 @@ impl DependencyAnalyzer {
             println!("Package publish setting: {:?}", publish);
         }
 
-        // 依存関係を読み込む
+        // Load dependencies
         if let Some(dependencies) = doc.get("dependencies").and_then(|d| d.as_table()) {
             for (name, value) in dependencies.iter() {
                 let crate_name = name.to_string();
@@ -137,13 +137,13 @@ impl DependencyAnalyzer {
                     println!("Dependency value type: {:?}", value);
                 }
                 
-                // 既に存在する場合はスキップ
+                // Skip if already exists
                 if crate_refs.contains_key(&crate_name) {
                     continue;
                 }
 
                 match value {
-                    // パス依存の場合（通常のテーブル形式）
+                    // Path dependency (standard table format)
                     Item::Table(table) => {
                         if self.debug {
                             println!("Dependency {} is a table: {:?}", crate_name, table);
@@ -167,7 +167,7 @@ impl DependencyAnalyzer {
                             }
                         }
                     },
-                    // パス依存の場合（インラインテーブル形式）
+                    // Path dependency (inline table format)
                     Item::Value(val) if val.is_inline_table() => {
                         if self.debug {
                             println!("Dependency {} is an inline table: {:?}", crate_name, val);
@@ -193,9 +193,9 @@ impl DependencyAnalyzer {
                             }
                         }
                     },
-                    // 通常の依存関係の場合
+                    // Regular dependency
                     _ => {
-                        // 通常の依存関係は分析時に検出されるので、ここでは何もしない
+                        // Regular dependencies are detected during analysis, so nothing to do here
                         if self.debug {
                             println!("Skipping regular dependency: {}", crate_name);
                         }
