@@ -78,7 +78,10 @@ impl DependencyAnalyzer {
             for (name, crate_ref) in &crate_refs {
                 println!("- {} (used in {} files)", name, crate_ref.usage_count());
                 if crate_ref.is_path_dependency {
-                    println!("  Path dependency: {}", crate_ref.path.as_ref().unwrap_or(&"unknown".to_string()));
+                    println!(
+                        "  Path dependency: {}",
+                        crate_ref.path.as_ref().unwrap_or(&"unknown".to_string())
+                    );
                 }
                 if let Some(publish) = crate_ref.publish {
                     println!("  Publish: {}", publish);
@@ -94,7 +97,10 @@ impl DependencyAnalyzer {
     }
 
     /// Load existing dependency information from Cargo.toml
-    fn load_existing_dependencies(&self, crate_refs: &mut HashMap<String, CrateReference>) -> Result<()> {
+    fn load_existing_dependencies(
+        &self,
+        crate_refs: &mut HashMap<String, CrateReference>,
+    ) -> Result<()> {
         let cargo_toml_path = self.project_root.join("Cargo.toml");
         if !cargo_toml_path.exists() {
             return Ok(());
@@ -106,16 +112,14 @@ impl DependencyAnalyzer {
 
         let content = fs::read_to_string(&cargo_toml_path)
             .with_context(|| format!("Failed to read Cargo.toml at {:?}", cargo_toml_path))?;
-        let doc = content.parse::<DocumentMut>()
+        let doc = content
+            .parse::<DocumentMut>()
             .with_context(|| format!("Failed to parse Cargo.toml at {:?}", cargo_toml_path))?;
 
         // Check package publish settings
         let publish = if let Some(package) = doc.get("package") {
             if let Some(publish_value) = package.get("publish") {
-                match publish_value.as_bool() {
-                    Some(value) => Some(value),
-                    None => None,
-                }
+                publish_value.as_bool()
             } else {
                 None
             }
@@ -131,12 +135,12 @@ impl DependencyAnalyzer {
         if let Some(dependencies) = doc.get("dependencies").and_then(|d| d.as_table()) {
             for (name, value) in dependencies.iter() {
                 let crate_name = name.to_string();
-                
+
                 if self.debug {
                     println!("Found dependency: {}", crate_name);
                     println!("Dependency value type: {:?}", value);
                 }
-                
+
                 // Skip if already exists
                 if crate_refs.contains_key(&crate_name) {
                     continue;
@@ -153,20 +157,26 @@ impl DependencyAnalyzer {
                                 println!("Path value for {}: {:?}", crate_name, path_value);
                             }
                             if let Some(path_str) = path_value.as_str() {
-                                let mut crate_ref = CrateReference::with_path(crate_name.clone(), path_str.to_string());
+                                let mut crate_ref = CrateReference::with_path(
+                                    crate_name.clone(),
+                                    path_str.to_string(),
+                                );
                                 if let Some(publish_value) = publish {
                                     crate_ref.set_publish(publish_value);
                                 }
-                                
+
                                 if self.debug {
-                                    println!("Adding path dependency: {} at {}", crate_name, path_str);
+                                    println!(
+                                        "Adding path dependency: {} at {}",
+                                        crate_name, path_str
+                                    );
                                     println!("With publish setting: {:?}", crate_ref.publish);
                                 }
-                                
+
                                 crate_refs.insert(crate_name, crate_ref);
                             }
                         }
-                    },
+                    }
                     // Path dependency (inline table format)
                     Item::Value(val) if val.is_inline_table() => {
                         if self.debug {
@@ -178,21 +188,27 @@ impl DependencyAnalyzer {
                                     println!("Path value for {}: {:?}", crate_name, path_value);
                                 }
                                 if let Some(path_str) = path_value.as_str() {
-                                    let mut crate_ref = CrateReference::with_path(crate_name.clone(), path_str.to_string());
+                                    let mut crate_ref = CrateReference::with_path(
+                                        crate_name.clone(),
+                                        path_str.to_string(),
+                                    );
                                     if let Some(publish_value) = publish {
                                         crate_ref.set_publish(publish_value);
                                     }
-                                    
+
                                     if self.debug {
-                                        println!("Adding path dependency (inline): {} at {}", crate_name, path_str);
+                                        println!(
+                                            "Adding path dependency (inline): {} at {}",
+                                            crate_name, path_str
+                                        );
                                         println!("With publish setting: {:?}", crate_ref.publish);
                                     }
-                                    
+
                                     crate_refs.insert(crate_name, crate_ref);
                                 }
                             }
                         }
-                    },
+                    }
                     // Regular dependency
                     _ => {
                         // Regular dependencies are detected during analysis, so nothing to do here
@@ -374,7 +390,7 @@ mod tests {
     #[test]
     fn test_load_existing_dependencies() -> Result<()> {
         let temp_dir = TempDir::new()?;
-        
+
         // Create Cargo.toml with path dependencies
         let cargo_toml_content = r#"
 [package]
@@ -387,11 +403,11 @@ publish = false
 serde = "1.0"
 internal-crate = { path = "../internal-crate" }
 "#;
-        
+
         let cargo_toml_path = temp_dir.path().join("Cargo.toml");
         let mut file = File::create(&cargo_toml_path)?;
         writeln!(file, "{}", cargo_toml_content)?;
-        
+
         // Create a simple source file to ensure the analyzer has something to work with
         fs::create_dir_all(temp_dir.path().join("src"))?;
         let main_rs_path = temp_dir.path().join("src/main.rs");
@@ -402,26 +418,36 @@ fn main() {
 "#;
         let mut file = File::create(main_rs_path)?;
         writeln!(file, "{}", main_rs_content)?;
-        
+
         // Run the analyzer with debug mode to see what's happening
         let analyzer = DependencyAnalyzer::with_debug(temp_dir.path().to_path_buf(), true);
-        
+
         // Analyze dependencies (this will call load_existing_dependencies internally)
         let crate_refs = analyzer.analyze_dependencies()?;
-        
+
         // Check that internal-crate was detected as a path dependency
-        assert!(crate_refs.contains_key("internal-crate"), 
-                "internal-crate dependency not found");
-        
+        assert!(
+            crate_refs.contains_key("internal-crate"),
+            "internal-crate dependency not found"
+        );
+
         if let Some(internal_crate) = crate_refs.get("internal-crate") {
-            assert!(internal_crate.is_path_dependency, 
-                    "internal-crate should be a path dependency");
-            assert_eq!(internal_crate.path, Some("../internal-crate".to_string()), 
-                      "internal-crate path should be ../internal-crate");
-            assert_eq!(internal_crate.publish, Some(false), 
-                      "publish should be false");
+            assert!(
+                internal_crate.is_path_dependency,
+                "internal-crate should be a path dependency"
+            );
+            assert_eq!(
+                internal_crate.path,
+                Some("../internal-crate".to_string()),
+                "internal-crate path should be ../internal-crate"
+            );
+            assert_eq!(
+                internal_crate.publish,
+                Some(false),
+                "publish should be false"
+            );
         }
-        
+
         Ok(())
     }
 
@@ -455,9 +481,18 @@ fn main() {
             println!("- {} (used in {} files)", name, crate_ref.usage_count());
         }
 
-        assert!(crate_refs.contains_key("serde"), "serde dependency not found");
-        assert!(crate_refs.contains_key("tokio"), "tokio dependency not found");
-        assert!(crate_refs.contains_key("anyhow"), "anyhow dependency not found");
+        assert!(
+            crate_refs.contains_key("serde"),
+            "serde dependency not found"
+        );
+        assert!(
+            crate_refs.contains_key("tokio"),
+            "tokio dependency not found"
+        );
+        assert!(
+            crate_refs.contains_key("anyhow"),
+            "anyhow dependency not found"
+        );
 
         Ok(())
     }

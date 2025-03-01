@@ -47,7 +47,7 @@ impl DependencyUpdater {
 
         // Check if this is a workspace or a package
         let is_workspace = doc.get("workspace").is_some();
-        if is_workspace && !doc.get("package").is_some() {
+        if is_workspace && doc.get("package").is_none() {
             if self.debug {
                 println!("This is a workspace root without a package. Skipping dependency update.");
             }
@@ -60,7 +60,10 @@ impl DependencyUpdater {
         // Get existing dependencies
         let existing_deps = if let Some(deps) = doc.get(&deps_path) {
             if let Some(table) = deps.as_table() {
-                table.iter().map(|(k, _)| k.to_string()).collect::<HashSet<_>>()
+                table
+                    .iter()
+                    .map(|(k, _)| k.to_string())
+                    .collect::<HashSet<_>>()
             } else {
                 HashSet::new()
             }
@@ -103,37 +106,43 @@ impl DependencyUpdater {
         if crate_ref.is_path_dependency {
             if let Some(path) = &crate_ref.path {
                 if self.debug {
-                    println!("Adding path dependency: {} with path {}", crate_ref.name, path);
+                    println!(
+                        "Adding path dependency: {} with path {}",
+                        crate_ref.name, path
+                    );
                 }
-                
+
                 // Get or create the dependencies table
                 let deps = doc
                     .entry(deps_path)
                     .or_insert(toml_edit::table())
                     .as_table_mut()
                     .ok_or_else(|| anyhow::anyhow!("Failed to get dependencies table"))?;
-                
+
                 // Add internal crate as path dependency
                 let mut table = Table::new();
                 table["path"] = toml_edit::value(path.clone());
-                
+
                 // Add publish setting if available
                 if let Some(publish) = crate_ref.publish {
                     table["publish"] = toml_edit::value(publish);
                 }
-                
+
                 deps[&crate_ref.name] = toml_edit::Item::Table(table);
                 return Ok(());
             }
         }
-        
+
         // For regular dependencies, get the latest version from crates.io
         let version = match self.get_latest_version(&crate_ref.name) {
             Ok(v) => v,
             Err(e) => {
                 // crates.ioで見つからない場合、内部クレートの可能性があるため警告を表示して処理を続行
                 if self.debug {
-                    println!("Warning: Failed to get version for {}: {}", crate_ref.name, e);
+                    println!(
+                        "Warning: Failed to get version for {}: {}",
+                        crate_ref.name, e
+                    );
                     println!("This might be an internal crate not published on crates.io.");
                     println!("Skipping this dependency.");
                 }
@@ -178,25 +187,32 @@ impl DependencyUpdater {
         if crate_name.contains('-') && crate_name.replace('-', "_") != crate_name {
             let normalized_name = crate_name.replace('-', "_");
             if self.debug {
-                println!("Checking if {} is an internal crate (normalized: {})", crate_name, normalized_name);
+                println!(
+                    "Checking if {} is an internal crate (normalized: {})",
+                    crate_name, normalized_name
+                );
             }
-            
+
             // Check if it's an internal crate by reading Cargo.toml
             let workspace_root = self.find_workspace_root()?;
             let workspace_cargo_toml = workspace_root.join("Cargo.toml");
-            
+
             if workspace_cargo_toml.exists() {
                 let content = fs::read_to_string(&workspace_cargo_toml)?;
-                if content.contains(&format!("name = \"{}\"", crate_name)) || 
-                   content.contains(&format!("name = \"{}\"", normalized_name)) {
+                if content.contains(&format!("name = \"{}\"", crate_name))
+                    || content.contains(&format!("name = \"{}\"", normalized_name))
+                {
                     if self.debug {
-                        println!("{} appears to be an internal crate in the workspace", crate_name);
+                        println!(
+                            "{} appears to be an internal crate in the workspace",
+                            crate_name
+                        );
                     }
                     return Err(anyhow::anyhow!("Internal crate not published on crates.io"));
                 }
             }
         }
-        
+
         // Get the latest version from crates.io
         let url = format!("https://crates.io/api/v1/crates/{}", crate_name);
         let response = ureq::get(&url).call();
@@ -220,17 +236,20 @@ impl DependencyUpdater {
                         // Use only major and minor for stability
                         Ok(format!("{}.{}", v.major, v.minor))
                     }
-                    None => Err(anyhow::anyhow!("No valid versions found for {}", crate_name)),
+                    None => Err(anyhow::anyhow!(
+                        "No valid versions found for {}",
+                        crate_name
+                    )),
                 }
             }
             Err(e) => Err(anyhow::anyhow!("Failed to fetch crate info: {}", e)),
         }
     }
-    
+
     /// Find the workspace root directory
     fn find_workspace_root(&self) -> Result<PathBuf> {
         let mut current_dir = self.project_root.clone();
-        
+
         loop {
             let cargo_toml = current_dir.join("Cargo.toml");
             if cargo_toml.exists() {
@@ -239,7 +258,7 @@ impl DependencyUpdater {
                     return Ok(current_dir);
                 }
             }
-            
+
             if !current_dir.pop() {
                 // If we've reached the root directory, return the current project root
                 return Ok(self.project_root.clone());

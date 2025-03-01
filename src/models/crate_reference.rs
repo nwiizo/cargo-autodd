@@ -81,7 +81,8 @@ mod tests {
 
     #[test]
     fn test_with_path() {
-        let crate_ref = CrateReference::with_path("test_crate".to_string(), "../test_crate".to_string());
+        let crate_ref =
+            CrateReference::with_path("test_crate".to_string(), "../test_crate".to_string());
         assert_eq!(crate_ref.name, "test_crate");
         assert!(crate_ref.features.is_empty());
         assert!(crate_ref.used_in.is_empty());
