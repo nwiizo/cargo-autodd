@@ -55,7 +55,7 @@ impl DependencyAnalyzer {
                 let file_path = path.to_path_buf();
 
                 self.analyze_file(FileAnalysisContext {
-                    content: &content,
+                    content: content.trim().to_string(),
                     file_path: &file_path,
                     use_regex: &use_regex,
                     extern_regex: &extern_regex,
@@ -296,7 +296,7 @@ impl DependencyAnalyzer {
 }
 
 struct FileAnalysisContext<'a> {
-    content: &'a str,
+    content: String,
     file_path: &'a PathBuf,
     use_regex: &'a Regex,
     extern_regex: &'a Regex,
@@ -468,9 +468,8 @@ fn main() {
         let use_regex = Regex::new(r"^\s*use\s+([a-zA-Z_][a-zA-Z0-9_]*(?:::[a-zA-Z0-9_]*)*)")?;
         let extern_regex = Regex::new(r"^\s*extern\s+crate\s+([a-zA-Z_][a-zA-Z0-9_]*)")?;
 
-        #[allow(clippy::needless_borrow)]
         analyzer.analyze_file(FileAnalysisContext {
-            content: &content,
+            content: content.trim().to_string(),
             file_path: &file_path,
             use_regex: &use_regex,
             extern_regex: &extern_regex,
