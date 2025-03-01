@@ -1,6 +1,6 @@
 [package]
 name = "cargo-autodd"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 description = "Automatically update dependencies in Cargo.toml"
 license = "MIT"
@@ -9,7 +9,6 @@ documentation = "https://github.com/nwiizo/cargo-autodd"
 homepage = "https://github.com/nwiizo/cargo-autodd"
 authors = ["syu.m.5151@gmail.com"]
 
-# cargoのサブコマンドとして実行できるように設定
 [[bin]]
 name = "cargo-autodd"
 path = "src/main.rs"
