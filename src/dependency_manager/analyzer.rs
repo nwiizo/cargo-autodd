@@ -41,7 +41,7 @@ impl DependencyAnalyzer {
 
             // Skip test files and build scripts
             if path.to_string_lossy().contains("tests/")
-                || path.file_name().map_or(false, |f| f == "build.rs")
+                || path.file_name().is_some_and(|f| f == "build.rs")
             {
                 continue;
             }
@@ -250,8 +250,6 @@ mod tests {
 
         let use_regex = Regex::new(r"^\s*use\s+([a-zA-Z_][a-zA-Z0-9_]*(?:::[a-zA-Z0-9_]*)*)")?;
         let extern_regex = Regex::new(r"^\s*extern\s+crate\s+([a-zA-Z_][a-zA-Z0-9_]*)")?;
-        let nested_regex = Regex::new(r"\{([^}]*)\}")?;
-        let item_regex = Regex::new(r"([a-zA-Z_][a-zA-Z0-9_]*)")?;
         let mut crate_refs = HashMap::new();
 
         analyzer.analyze_file(FileAnalysisContext {

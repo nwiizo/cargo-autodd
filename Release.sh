@@ -49,6 +49,12 @@ fi
 # mac os では
 sed -i '' "s/^version = .*/version = \"${VERSION#v}\"/" Cargo.toml
 
+# cargo fmt を実行してフォーマットを整える
+cargo fmt || exit 1
+
+# cargo clippyを実行してコードをチェック
+cargo clippy --all-targets --all-features -- -D warnings || exit 1
+
 # cargo updateを実行してCargo.lockを更新
 cargo update || exit 1
 
