@@ -10,6 +10,12 @@ pub struct CrateReference {
     pub features: HashSet<String>,
     /// Set of file paths where this crate is used
     pub used_in: HashSet<PathBuf>,
+    /// Whether this crate is a path dependency (internal crate)
+    pub is_path_dependency: bool,
+    /// Path to the internal crate if it's a path dependency
+    pub path: Option<String>,
+    /// Whether this crate is marked as not publishable
+    pub publish: Option<bool>,
 }
 
 impl CrateReference {
@@ -18,6 +24,20 @@ impl CrateReference {
             name,
             features: HashSet::new(),
             used_in: HashSet::new(),
+            is_path_dependency: false,
+            path: None,
+            publish: None,
+        }
+    }
+
+    pub fn with_path(name: String, path: String) -> Self {
+        Self {
+            name,
+            features: HashSet::new(),
+            used_in: HashSet::new(),
+            is_path_dependency: true,
+            path: Some(path),
+            publish: None,
         }
     }
 
@@ -32,6 +52,15 @@ impl CrateReference {
     pub fn usage_count(&self) -> usize {
         self.used_in.len()
     }
+
+    pub fn set_as_path_dependency(&mut self, path: String) {
+        self.is_path_dependency = true;
+        self.path = Some(path);
+    }
+
+    pub fn set_publish(&mut self, publish: bool) {
+        self.publish = Some(publish);
+    }
 }
 
 #[cfg(test)]
@@ -45,6 +74,20 @@ mod tests {
         assert_eq!(crate_ref.name, "test_crate");
         assert!(crate_ref.features.is_empty());
         assert!(crate_ref.used_in.is_empty());
+        assert!(!crate_ref.is_path_dependency);
+        assert!(crate_ref.path.is_none());
+        assert!(crate_ref.publish.is_none());
+    }
+
+    #[test]
+    fn test_with_path() {
+        let crate_ref = CrateReference::with_path("test_crate".to_string(), "../test_crate".to_string());
+        assert_eq!(crate_ref.name, "test_crate");
+        assert!(crate_ref.features.is_empty());
+        assert!(crate_ref.used_in.is_empty());
+        assert!(crate_ref.is_path_dependency);
+        assert_eq!(crate_ref.path, Some("../test_crate".to_string()));
+        assert!(crate_ref.publish.is_none());
     }
 
     #[test]
@@ -61,5 +104,20 @@ mod tests {
         let mut crate_ref = CrateReference::new("test_crate".to_string());
         crate_ref.add_feature("test_feature".to_string());
         assert!(crate_ref.features.contains("test_feature"));
+    }
+
+    #[test]
+    fn test_set_as_path_dependency() {
+        let mut crate_ref = CrateReference::new("test_crate".to_string());
+        crate_ref.set_as_path_dependency("../test_crate".to_string());
+        assert!(crate_ref.is_path_dependency);
+        assert_eq!(crate_ref.path, Some("../test_crate".to_string()));
+    }
+
+    #[test]
+    fn test_set_publish() {
+        let mut crate_ref = CrateReference::new("test_crate".to_string());
+        crate_ref.set_publish(false);
+        assert_eq!(crate_ref.publish, Some(false));
     }
 }

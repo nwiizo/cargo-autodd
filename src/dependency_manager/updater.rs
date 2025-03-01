@@ -13,7 +13,6 @@ use ureq;
 
 use crate::models::CrateReference;
 use crate::utils::is_essential_dep;
-use crate::utils::is_std_crate;
 
 #[derive(Deserialize)]
 struct CratesIoResponse {
@@ -48,52 +47,49 @@ impl DependencyUpdater {
 
         // Check if this is a workspace or a package
         let is_workspace = doc.get("workspace").is_some();
-
-        // Determine the correct dependencies table (workspace or package)
-        let deps_path = if is_workspace {
-            "workspace.dependencies"
-        } else {
-            "dependencies"
-        };
-
-        // Get current dependencies
-        let mut current_deps = HashSet::new();
-        if let Some(Item::Table(deps)) = doc.get(deps_path) {
-            for (key, _) in deps.iter() {
-                current_deps.insert(key.to_string());
+        if is_workspace && !doc.get("package").is_some() {
+            if self.debug {
+                println!("This is a workspace root without a package. Skipping dependency update.");
             }
-        } else if is_workspace {
-            // Create workspace.dependencies if it doesn't exist
-            let workspace = doc.entry("workspace").or_insert(Item::Table(Table::new()));
-            if let Item::Table(workspace_table) = workspace {
-                workspace_table.insert("dependencies", Item::Table(Table::new()));
-            }
-        } else {
-            // Create dependencies if it doesn't exist for regular packages
-            doc.insert("dependencies", Item::Table(Table::new()));
+            return Ok(());
         }
 
+        // Get the dependencies path
+        let deps_path = self.get_dependencies_path()?;
+
+        // Get existing dependencies
+        let existing_deps = if let Some(deps) = doc.get(&deps_path) {
+            if let Some(table) = deps.as_table() {
+                table.iter().map(|(k, _)| k.to_string()).collect::<HashSet<_>>()
+            } else {
+                HashSet::new()
+            }
+        } else {
+            HashSet::new()
+        };
+
         // Add new dependencies
-        for (name, crate_ref) in crate_refs {
-            if !current_deps.contains(name) {
-                self.add_dependency(&mut doc, crate_ref, deps_path)?;
+        for crate_ref in crate_refs.values() {
+            if !existing_deps.contains(&crate_ref.name) {
+                self.add_dependency(&mut doc, crate_ref, &deps_path)?;
             }
         }
 
         // Remove unused dependencies
-        let used_crates: HashSet<_> = crate_refs.keys().cloned().collect();
-        let unused_deps: Vec<_> = current_deps
-            .difference(&used_crates)
-            .filter(|name| !is_essential_dep(name))
+        let used_deps = crate_refs.keys().cloned().collect::<HashSet<_>>();
+        let to_remove = existing_deps
+            .iter()
+            .filter(|dep| !used_deps.contains(*dep) && !is_essential_dep(dep))
             .cloned()
-            .collect();
+            .collect::<Vec<_>>();
 
-        for name in unused_deps {
-            self.remove_dependency(&mut doc, &name, deps_path)?;
-            println!("Removing unused dependency: {}", name);
+        for dep in to_remove {
+            self.remove_dependency(&mut doc, &dep, &deps_path)?;
         }
 
+        // Write back to Cargo.toml
         fs::write(&self.cargo_toml, doc.to_string())?;
+
         Ok(())
     }
 
@@ -103,47 +99,61 @@ impl DependencyUpdater {
         crate_ref: &CrateReference,
         deps_path: &str,
     ) -> Result<()> {
-        let version = self.get_latest_version(&crate_ref.name)?;
-
-        // Get or create the dependencies table
-        let deps = if deps_path.contains('.') {
-            // Handle nested table path like "workspace.dependencies"
-            let parts: Vec<&str> = deps_path.split('.').collect();
-            let parent = doc
-                .get_mut(parts[0])
-                .and_then(|v| v.as_table_mut())
-                .ok_or_else(|| anyhow::anyhow!("Could not find {} table", parts[0]))?;
-
-            parent
-                .get_mut(parts[1])
-                .and_then(|v| v.as_table_mut())
-                .ok_or_else(|| anyhow::anyhow!("Could not find {} table", deps_path))?
-        } else {
-            // Direct table like "dependencies"
-            doc.get_mut(deps_path)
-                .and_then(|v| v.as_table_mut())
-                .ok_or_else(|| anyhow::anyhow!("Could not find {} table", deps_path))?
+        // 内部クレート（path依存）の場合は、crates.ioで検索せずに追加
+        if crate_ref.is_path_dependency {
+            if let Some(path) = &crate_ref.path {
+                if self.debug {
+                    println!("Adding path dependency: {} with path {}", crate_ref.name, path);
+                }
+                
+                // 依存関係テーブルを取得または作成
+                let deps = doc
+                    .entry(deps_path)
+                    .or_insert(toml_edit::table())
+                    .as_table_mut()
+                    .ok_or_else(|| anyhow::anyhow!("Failed to get dependencies table"))?;
+                
+                // 内部クレートをpath依存として追加
+                let mut table = Table::new();
+                table["path"] = toml_edit::value(path.clone());
+                
+                // publish設定がある場合は追加
+                if let Some(publish) = crate_ref.publish {
+                    table["publish"] = toml_edit::value(publish);
+                }
+                
+                deps[&crate_ref.name] = toml_edit::Item::Table(table);
+                return Ok(());
+            }
+        }
+        
+        // 通常の依存関係の場合は、crates.ioから最新バージョンを取得
+        let version = match self.get_latest_version(&crate_ref.name) {
+            Ok(v) => v,
+            Err(e) => {
+                // crates.ioで見つからない場合、内部クレートの可能性があるため警告を表示して処理を続行
+                if self.debug {
+                    println!("Warning: Failed to get version for {}: {}", crate_ref.name, e);
+                    println!("This might be an internal crate not published on crates.io.");
+                    println!("Skipping this dependency.");
+                }
+                return Ok(());
+            }
         };
 
-        let mut dep_table = Table::new();
-        dep_table.insert("version", toml_edit::value(version));
-
-        if !crate_ref.features.is_empty() {
-            let mut array = toml_edit::Array::new();
-            for feature in &crate_ref.features {
-                array.push(feature.as_str());
-            }
-            dep_table.insert(
-                "features",
-                toml_edit::Item::Value(toml_edit::Value::Array(array)),
-            );
+        if self.debug {
+            println!("Adding dependency: {} = \"{}\"", crate_ref.name, version);
         }
 
-        deps.insert(&crate_ref.name, Item::Table(dep_table));
-        println!(
-            "Added dependency: {} with features: {:?}",
-            crate_ref.name, crate_ref.features
-        );
+        // Get or create the dependencies table
+        let deps = doc
+            .entry(deps_path)
+            .or_insert(toml_edit::table())
+            .as_table_mut()
+            .ok_or_else(|| anyhow::anyhow!("Failed to get dependencies table"))?;
+
+        // Add the dependency
+        deps[&crate_ref.name] = toml_edit::value(version);
 
         Ok(())
     }
@@ -164,44 +174,76 @@ impl DependencyUpdater {
     }
 
     pub fn get_latest_version(&self, crate_name: &str) -> Result<String> {
-        // Skip standard library types and modules
-        if is_std_crate(crate_name) {
-            return Err(anyhow::anyhow!("Standard library type: {}", crate_name));
-        }
-
-        let url = format!("https://crates.io/api/v1/crates/{}/versions", crate_name);
-
-        match ureq::get(&url).call() {
-            Ok(response) => {
-                let reader = BufReader::new(response.into_reader());
-                let response: CratesIoResponse = serde_json::from_reader(reader)?;
-
-                let latest_version =
-                    response
-                        .versions
-                        .iter()
-                        .find(|v| !v.yanked)
-                        .ok_or_else(|| {
-                            anyhow::anyhow!("No non-yanked version found for {}", crate_name)
-                        })?;
-
-                let version = Version::parse(&latest_version.num)?;
-                Ok(format!("^{}.{}.0", version.major, version.minor))
+        // 内部クレートの場合はエラーを返す
+        if crate_name.contains('-') && crate_name.replace('-', "_") != crate_name {
+            let normalized_name = crate_name.replace('-', "_");
+            if self.debug {
+                println!("Checking if {} is an internal crate (normalized: {})", crate_name, normalized_name);
             }
-            Err(ureq::Error::Status(404, _)) => {
-                if self.debug {
-                    println!("Warning: Crate '{}' not found on crates.io", crate_name);
+            
+            // Cargo.tomlを読み込んで内部クレートかどうかを確認
+            let workspace_root = self.find_workspace_root()?;
+            let workspace_cargo_toml = workspace_root.join("Cargo.toml");
+            
+            if workspace_cargo_toml.exists() {
+                let content = fs::read_to_string(&workspace_cargo_toml)?;
+                if content.contains(&format!("name = \"{}\"", crate_name)) || 
+                   content.contains(&format!("name = \"{}\"", normalized_name)) {
+                    if self.debug {
+                        println!("{} appears to be an internal crate in the workspace", crate_name);
+                    }
+                    return Err(anyhow::anyhow!("Internal crate not published on crates.io"));
                 }
-                Err(anyhow::anyhow!(
-                    "Crate '{}' not found on crates.io",
-                    crate_name
-                ))
             }
-            Err(e) => Err(anyhow::anyhow!(
-                "Failed to fetch version for {}: {}",
-                crate_name,
-                e
-            )),
+        }
+        
+        // crates.ioから最新バージョンを取得
+        let url = format!("https://crates.io/api/v1/crates/{}", crate_name);
+        let response = ureq::get(&url).call();
+
+        match response {
+            Ok(res) => {
+                let reader = BufReader::new(res.into_reader());
+                let crates_io_data: CratesIoResponse = serde_json::from_reader(reader)?;
+
+                // Find the latest non-yanked version
+                let latest_version = crates_io_data
+                    .versions
+                    .iter()
+                    .filter(|v| !v.yanked)
+                    .map(|v| Version::parse(&v.num))
+                    .filter_map(Result::ok)
+                    .max();
+
+                match latest_version {
+                    Some(v) => {
+                        // Use only major and minor for stability
+                        Ok(format!("{}.{}", v.major, v.minor))
+                    }
+                    None => Err(anyhow::anyhow!("No valid versions found for {}", crate_name)),
+                }
+            }
+            Err(e) => Err(anyhow::anyhow!("Failed to fetch crate info: {}", e)),
+        }
+    }
+    
+    /// ワークスペースのルートディレクトリを見つける
+    fn find_workspace_root(&self) -> Result<PathBuf> {
+        let mut current_dir = self.project_root.clone();
+        
+        loop {
+            let cargo_toml = current_dir.join("Cargo.toml");
+            if cargo_toml.exists() {
+                let content = fs::read_to_string(&cargo_toml)?;
+                if content.contains("[workspace]") {
+                    return Ok(current_dir);
+                }
+            }
+            
+            if !current_dir.pop() {
+                // ルートディレクトリに到達した場合は現在のプロジェクトルートを返す
+                return Ok(self.project_root.clone());
+            }
         }
     }
 
@@ -271,6 +313,11 @@ tokio = "1.0"
         let content = r#"
 [workspace]
 members = ["crate1", "crate2"]
+
+[package]
+name = "workspace-root"
+version = "0.1.0"
+edition = "2021"
 
 [workspace.dependencies]
 serde = "1.0"

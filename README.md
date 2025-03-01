@@ -4,7 +4,7 @@ A Cargo subcommand that automatically manages dependencies in your Rust projects
 
 ## 🔍 Overview
 
-cargo-autodd simplifies Rust dependency management by automatically adding required crates to your Cargo.toml based on `use` statements and `extern crate` declarations in your code. 
+cargo-autodd simplifies Rust dependency management by automatically adding required crates to your Cargo.toml based on `use` statements and `extern crate` declarations in your code.
 
 ![cargo-autodd demo](.github/cargo-autodd_01.gif)
 
@@ -18,6 +18,8 @@ cargo-autodd simplifies Rust dependency management by automatically adding requi
 - 🧹 Removes unused dependencies
 - 📊 Generates dependency usage reports
 - 🔒 Checks for security vulnerabilities
+- 🏢 Supports Cargo workspaces and monorepo structures
+- 🛡️ Handles internal crates with path dependencies correctly
 - 🐛 Debug mode for detailed analysis
 
 ## 📥 Installation
@@ -67,6 +69,22 @@ cargo autodd report
 cargo autodd security
 ```
 
+### Monorepo Usage
+
+```bash
+# Run in the root of your workspace to analyze all crates
+cargo autodd
+
+# Run in a specific crate directory within the workspace
+cd crates/my-crate
+cargo autodd
+```
+
+When using cargo-autodd in a monorepo:
+- Internal crates with `path` dependencies are automatically detected
+- The tool respects `publish = false` settings
+- Dependencies are correctly managed across the workspace
+
 ### Debug Mode
 
 In debug mode, the following detailed information is displayed:
@@ -87,6 +105,25 @@ In debug mode, the following detailed information is displayed:
 4. ✅ Verifies changes with `cargo check`
 5. 🔒 Checks for security vulnerabilities using the RustSec Advisory Database
 6. 📊 Generates detailed reports about dependency usage
+
+## 🏢 Monorepo Support
+
+cargo-autodd fully supports Cargo workspaces and monorepo structures:
+
+- 🔄 Correctly detects and handles internal crates within a workspace
+- 🛡️ Respects `publish = false` settings for internal crates
+- 🔗 Properly handles path dependencies in both standard and inline table formats:
+  ```toml
+  # Both formats are supported:
+  internal-crate = { path = "../internal-crate" }
+  
+  [dependencies.another-internal-crate]
+  path = "../another-internal-crate"
+  ```
+- 🚫 Avoids searching for internal crates on crates.io
+- 🧩 Works with workspace inheritance for dependency management
+
+This ensures that your internal crates that aren't meant to be published to crates.io are handled correctly, avoiding errors like `Crate 'internal_crate' not found on crates.io`.
 
 ## 👥 Contributing
 
