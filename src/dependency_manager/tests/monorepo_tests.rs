@@ -73,6 +73,7 @@ edition = "2021"
 
 [dependencies]
 internal-crate = { path = "../internal-crate" }
+tokio = "1.0"
 "#;
     let mut file = File::create(&public_cargo_toml)?;
     writeln!(file, "{}", public_content)?;
