@@ -1,7 +1,7 @@
 [package]
 name = "cargo-autodd"
-version = "0.1.8"
-edition = "2021"
+version = "0.1.9"
+edition = "2024"
 description = "Automatically update dependencies in Cargo.toml"
 license = "MIT"
 repository = "https://github.com/nwiizo/cargo-autodd"
