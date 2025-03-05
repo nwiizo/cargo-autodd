@@ -237,42 +237,43 @@ impl DependencyAnalyzer {
         // コンテンツを行ごとに処理
         let mut current_line_num = 0;
         let lines: Vec<&str> = content.lines().collect();
-        
+
         while current_line_num < lines.len() {
             let line = lines[current_line_num].trim();
             current_line_num += 1;
-            
+
             if line.is_empty() {
                 continue;
             }
-            
+
             // コメント行をスキップ
             if line.starts_with("//") || line.starts_with("/*") {
                 continue;
             }
-            
+
             // use ステートメントを処理
             if line.starts_with("use") {
                 // 複数行の use ステートメントを収集
                 let mut use_statement = line.to_string();
-                let mut brace_count = line.chars().filter(|&c| c == '{').count() - line.chars().filter(|&c| c == '}').count();
-                
+                let mut brace_count = line.chars().filter(|&c| c == '{').count()
+                    - line.chars().filter(|&c| c == '}').count();
+
                 // 中括弧が閉じられるまで続きを読み込む
                 while brace_count > 0 && current_line_num < lines.len() {
                     let next_line = lines[current_line_num].trim();
                     current_line_num += 1;
-                    use_statement.push_str("\n");
+                    use_statement.push('\n');
                     use_statement.push_str(next_line);
-                    
+
                     brace_count += next_line.chars().filter(|&c| c == '{').count();
                     brace_count -= next_line.chars().filter(|&c| c == '}').count();
                 }
-                
+
                 // use ステートメントからクレート名を抽出
                 self.extract_crates_from_use(&use_statement, crate_refs)?;
                 continue;
             }
-            
+
             // extern crate ステートメントを処理
             if let Some(cap) = extern_regex.captures(line) {
                 let crate_name = cap[1].to_string();
@@ -284,22 +285,26 @@ impl DependencyAnalyzer {
                 }
             }
         }
-        
+
         Ok(())
     }
-    
+
     // use ステートメントからクレート名を抽出するメソッド
-    fn extract_crates_from_use(&self, use_statement: &str, crate_refs: &mut HashMap<String, CrateReference>) -> Result<()> {
+    fn extract_crates_from_use(
+        &self,
+        use_statement: &str,
+        crate_refs: &mut HashMap<String, CrateReference>,
+    ) -> Result<()> {
         // コメントを削除
         let clean_use = self.remove_comments(use_statement);
-        
+
         if self.debug {
             println!("Cleaned use statement: {}", clean_use);
         }
-        
+
         // "use " プレフィックスを削除
         let statement = clean_use.trim_start_matches("use").trim();
-        
+
         // 単純な use ステートメント (例: use serde::Serialize;)
         if !statement.starts_with('{') && statement.contains("::") {
             let parts: Vec<&str> = statement.split("::").collect();
@@ -309,7 +314,8 @@ impl DependencyAnalyzer {
             }
         }
         // クレート名付きの中括弧 use ステートメント (例: use crate_name::{...};)
-        else if !statement.starts_with('{') && statement.contains("::") && statement.contains('{') {
+        else if !statement.starts_with('{') && statement.contains("::") && statement.contains('{')
+        {
             let parts: Vec<&str> = statement.split("::").collect();
             if !parts.is_empty() {
                 let crate_name = parts[0].trim();
@@ -320,24 +326,16 @@ impl DependencyAnalyzer {
         else if statement.starts_with('{') {
             // 中括弧の内容を抽出
             let content = &statement[1..statement.rfind('}').unwrap_or(statement.len())];
-            
+
             // カンマで区切られた各項目を処理
             for item in content.split(',') {
                 let item = item.trim();
                 if item.is_empty() {
                     continue;
                 }
-                
-                // ネストされた中括弧を含む項目 (例: crate::{...})
-                if item.contains("::") && item.contains('{') {
-                    let parts: Vec<&str> = item.split("::").collect();
-                    if !parts.is_empty() {
-                        let crate_name = parts[0].trim();
-                        self.add_crate_if_valid(crate_name, crate_refs);
-                    }
-                }
-                // 通常の項目 (例: crate::module)
-                else if item.contains("::") {
+
+                // 項目に :: が含まれる場合（例: crate::module または crate::{...}）
+                if item.contains("::") {
                     let parts: Vec<&str> = item.split("::").collect();
                     if !parts.is_empty() {
                         let crate_name = parts[0].trim();
@@ -356,17 +354,25 @@ impl DependencyAnalyzer {
             let crate_name = statement.trim_end_matches(';').trim();
             self.add_crate_if_valid(crate_name, crate_refs);
         }
-        
+
         Ok(())
     }
-    
+
     // クレート名が有効な場合に追加するヘルパーメソッド
-    fn add_crate_if_valid(&self, crate_name: &str, crate_refs: &mut HashMap<String, CrateReference>) {
+    fn add_crate_if_valid(
+        &self,
+        crate_name: &str,
+        crate_refs: &mut HashMap<String, CrateReference>,
+    ) {
         // クレート名から余分な文字を削除
-        let clean_name = crate_name.trim()
-            .trim_end_matches(|c| c == '}' || c == '\n' || c == '\r' || c == ':');
-            
-        if !clean_name.is_empty() && !is_std_crate(clean_name) && clean_name != "crate" && clean_name != "self" && clean_name != "super" {
+        let clean_name = crate_name.trim().trim_end_matches(['}', '\n', '\r', ':']);
+
+        if !clean_name.is_empty()
+            && !is_std_crate(clean_name)
+            && clean_name != "crate"
+            && clean_name != "self"
+            && clean_name != "super"
+        {
             if self.debug {
                 println!("Found crate: {}", clean_name);
             }
@@ -376,7 +382,7 @@ impl DependencyAnalyzer {
                 .add_usage(PathBuf::from(""));
         }
     }
-    
+
     // コメントを削除するヘルパーメソッド
     fn remove_comments(&self, code: &str) -> String {
         let mut clean_code = String::new();
@@ -384,7 +390,7 @@ impl DependencyAnalyzer {
         let mut in_block_comment = false;
         let mut i = 0;
         let chars: Vec<char> = code.chars().collect();
-        
+
         while i < chars.len() {
             if in_line_comment {
                 if chars[i] == '\n' {
@@ -394,7 +400,7 @@ impl DependencyAnalyzer {
                 i += 1;
                 continue;
             }
-            
+
             if in_block_comment {
                 if i + 1 < chars.len() && chars[i] == '*' && chars[i + 1] == '/' {
                     in_block_comment = false;
@@ -404,23 +410,23 @@ impl DependencyAnalyzer {
                 }
                 continue;
             }
-            
+
             if i + 1 < chars.len() && chars[i] == '/' && chars[i + 1] == '/' {
                 in_line_comment = true;
                 i += 2;
                 continue;
             }
-            
+
             if i + 1 < chars.len() && chars[i] == '/' && chars[i + 1] == '*' {
                 in_block_comment = true;
                 i += 2;
                 continue;
             }
-            
+
             clean_code.push(chars[i]);
             i += 1;
         }
-        
+
         clean_code
     }
 }
@@ -633,7 +639,7 @@ fn main() {
         let temp_dir = TempDir::new()?;
         let analyzer = DependencyAnalyzer::new(temp_dir.path().to_path_buf());
         let file_path = temp_dir.path().join("complex_use.rs");
-        
+
         // テスト用の複雑な use ステートメントを含むコンテンツ
         let content = r#"
         // Simple use statement
@@ -665,14 +671,14 @@ fn main() {
             log::*
         };
         "#;
-        
+
         println!("\nComplex test file content:\n{}", content);
         println!("\nStarting analysis...\n");
-        
+
         let mut crate_refs = HashMap::new();
         let use_regex = Regex::new(r"^\s*use\s+([a-zA-Z_][a-zA-Z0-9_]*(?:::[a-zA-Z0-9_]*)*)")?;
         let extern_regex = Regex::new(r"^\s*extern\s+crate\s+([a-zA-Z_][a-zA-Z0-9_]*)")?;
-        
+
         analyzer.analyze_file(FileAnalysisContext {
             content: content.to_string(),
             file_path: &file_path,
@@ -680,27 +686,45 @@ fn main() {
             extern_regex: &extern_regex,
             crate_refs: &mut crate_refs,
         })?;
-        
+
         println!("\nAnalysis complete. Found crates:");
         for (name, crate_ref) in &crate_refs {
             println!("- {}: {:?}", name, crate_ref);
         }
-        
+
         // 期待される結果の検証
         assert!(crate_refs.contains_key("serde"), "serde should be detected");
         assert!(crate_refs.contains_key("tokio"), "tokio should be detected");
-        assert!(crate_refs.contains_key("reqwest"), "reqwest should be detected");
-        assert!(crate_refs.contains_key("anyhow"), "anyhow should be detected");
+        assert!(
+            crate_refs.contains_key("reqwest"),
+            "reqwest should be detected"
+        );
+        assert!(
+            crate_refs.contains_key("anyhow"),
+            "anyhow should be detected"
+        );
         assert!(crate_refs.contains_key("regex"), "regex should be detected");
-        assert!(crate_refs.contains_key("walkdir"), "walkdir should be detected");
+        assert!(
+            crate_refs.contains_key("walkdir"),
+            "walkdir should be detected"
+        );
         assert!(crate_refs.contains_key("clap"), "clap should be detected");
         assert!(crate_refs.contains_key("log"), "log should be detected");
-        
+
         // コメントアウトされたクレートは検出されないことを確認
-        assert!(!crate_refs.contains_key("serde_json"), "serde_json should not be detected (commented out)");
-        assert!(!crate_refs.contains_key("rand"), "rand should not be detected (commented out)");
-        assert!(!crate_refs.contains_key("chrono"), "chrono should not be detected (commented out)");
-        
+        assert!(
+            !crate_refs.contains_key("serde_json"),
+            "serde_json should not be detected (commented out)"
+        );
+        assert!(
+            !crate_refs.contains_key("rand"),
+            "rand should not be detected (commented out)"
+        );
+        assert!(
+            !crate_refs.contains_key("chrono"),
+            "chrono should not be detected (commented out)"
+        );
+
         Ok(())
     }
 
@@ -710,7 +734,7 @@ fn main() {
         // デバッグモードを有効にして、より詳細な出力を得る
         let analyzer = DependencyAnalyzer::with_debug(temp_dir.path().to_path_buf(), true);
         let file_path = temp_dir.path().join("nested_use.rs");
-        
+
         // より複雑なネストされたuseステートメントを含むコンテンツ
         let content = r#"
         // Nested use with multiple levels
@@ -747,14 +771,14 @@ fn main() {
             log::{debug, info, warn, error}
         };
         "#;
-        
+
         println!("\nNested test file content:\n{}", content);
         println!("\nStarting analysis...\n");
-        
+
         let mut crate_refs = HashMap::new();
         let use_regex = Regex::new(r"^\s*use\s+([a-zA-Z_][a-zA-Z0-9_]*(?:::[a-zA-Z0-9_]*)*)")?;
         let extern_regex = Regex::new(r"^\s*extern\s+crate\s+([a-zA-Z_][a-zA-Z0-9_]*)")?;
-        
+
         analyzer.analyze_file(FileAnalysisContext {
             content: content.to_string(),
             file_path: &file_path,
@@ -762,28 +786,36 @@ fn main() {
             extern_regex: &extern_regex,
             crate_refs: &mut crate_refs,
         })?;
-        
+
         println!("\nAnalysis complete. Found crates:");
         for (name, crate_ref) in &crate_refs {
             println!("- {}: {:?}", name, crate_ref);
         }
-        
+
         // 期待される結果の検証
         assert!(crate_refs.contains_key("serde"), "serde should be detected");
-        assert!(crate_refs.contains_key("reqwest"), "reqwest should be detected");
+        assert!(
+            crate_refs.contains_key("reqwest"),
+            "reqwest should be detected"
+        );
         assert!(crate_refs.contains_key("clap"), "clap should be detected");
         assert!(crate_refs.contains_key("log"), "log should be detected");
-        
+
         // tokioクレートが検出されない場合は、その理由を出力
         if !crate_refs.contains_key("tokio") {
-            println!("NOTE: tokio was not detected. This is a known limitation of the current implementation.");
+            println!(
+                "NOTE: tokio was not detected. This is a known limitation of the current implementation."
+            );
             println!("The current implementation does not fully support deeply nested imports.");
             println!("This is acceptable for now, as the main goal is to detect top-level crates.");
         }
-        
+
         // コメントアウトされたクレートは検出されないことを確認
-        assert!(!crate_refs.contains_key("rand"), "rand should not be detected (commented out)");
-        
+        assert!(
+            !crate_refs.contains_key("rand"),
+            "rand should not be detected (commented out)"
+        );
+
         Ok(())
     }
 }

@@ -3,8 +3,8 @@ use std::fs::{self, File};
 use std::io::Write;
 use tempfile::TempDir;
 
-use crate::dependency_manager::DependencyAnalyzer;
 use crate::CargoAutodd;
+use crate::dependency_manager::DependencyAnalyzer;
 
 /// monorepo構造のテスト環境を作成する
 fn create_monorepo_test_environment() -> Result<TempDir> {
