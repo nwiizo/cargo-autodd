@@ -378,10 +378,10 @@ impl DependencyAnalyzer {
             if self.debug {
                 println!("Found crate: {}", clean_name);
             }
-            
+
             // Store the original name to preserve dashes/underscores
             let original_name = clean_name.to_string();
-            
+
             crate_refs
                 .entry(original_name.clone())
                 .or_insert_with(|| CrateReference::new(original_name))
@@ -444,17 +444,17 @@ impl DependencyAnalyzer {
     ) -> Result<()> {
         // コメントを除去したコンテンツを使用
         let clean_content = self.remove_comments(content);
-        
+
         // 完全修飾パスのパターン（例: serde_json::value::Value）
         let direct_ref_regex = Regex::new(r"([a-zA-Z_][a-zA-Z0-9_-]*)::([a-zA-Z0-9_:]+)")?;
-        
+
         for cap in direct_ref_regex.captures_iter(&clean_content) {
             let potential_crate = &cap[1];
             if !is_std_crate(potential_crate) {
                 self.add_crate_if_valid(potential_crate, crate_refs);
             }
         }
-        
+
         Ok(())
     }
 }

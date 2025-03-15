@@ -14,20 +14,17 @@ fn main() -> Result<()> {
                     Arg::with_name("debug")
                         .short("d")
                         .long("debug")
-                        .help("Enable debug output")
+                        .help("Enable debug output"),
                 )
                 .subcommand(
-                    SubCommand::with_name("update")
-                        .about("Update dependencies to latest versions")
+                    SubCommand::with_name("update").about("Update dependencies to latest versions"),
                 )
                 .subcommand(
-                    SubCommand::with_name("report")
-                        .about("Generate dependency usage report")
+                    SubCommand::with_name("report").about("Generate dependency usage report"),
                 )
                 .subcommand(
-                    SubCommand::with_name("security")
-                        .about("Check for security vulnerabilities")
-                )
+                    SubCommand::with_name("security").about("Check for security vulnerabilities"),
+                ),
         )
         .get_matches();
 
