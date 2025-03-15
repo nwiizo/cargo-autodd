@@ -121,7 +121,7 @@ fn test_monorepo_dependency_analysis() -> Result<()> {
             internal_crate.is_path_dependency,
             "internal-crate should be a path dependency"
         );
-    } else if let Some(internal_crate) = crate_refs.get("internal_crate") {
+    } else if let Some(_internal_crate) = crate_refs.get("internal_crate") {
         // If internal_crate is detected from use statements, it might not be recognized as a path dependency
         // Skip this check in that case
         println!("Note: internal_crate detected instead of internal-crate");
