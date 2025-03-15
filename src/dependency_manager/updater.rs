@@ -233,8 +233,8 @@ impl DependencyUpdater {
 
                 match latest_version {
                     Some(v) => {
-                        // Use only major and minor for stability
-                        Ok(format!("{}.{}", v.major, v.minor))
+                        // Include patch version for more accurate updates
+                        Ok(format!("{}.{}.{}", v.major, v.minor, v.patch))
                     }
                     None => Err(anyhow::anyhow!(
                         "No valid versions found for {}",

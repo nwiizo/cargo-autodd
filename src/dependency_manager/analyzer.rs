@@ -234,9 +234,8 @@ impl DependencyAnalyzer {
             crate_refs,
         } = ctx;
 
-        // コンテンツを行ごとに処理
-        let mut current_line_num = 0;
         let lines: Vec<&str> = content.lines().collect();
+        let mut current_line_num = 0;
 
         while current_line_num < lines.len() {
             let line = lines[current_line_num].trim();
@@ -285,6 +284,9 @@ impl DependencyAnalyzer {
                 }
             }
         }
+
+        // Scan for direct references (e.g., serde_json::Value)
+        self.scan_for_direct_references(&content, crate_refs)?;
 
         Ok(())
     }
@@ -376,9 +378,13 @@ impl DependencyAnalyzer {
             if self.debug {
                 println!("Found crate: {}", clean_name);
             }
+            
+            // Store the original name to preserve dashes/underscores
+            let original_name = clean_name.to_string();
+            
             crate_refs
-                .entry(clean_name.to_string())
-                .or_insert_with(|| CrateReference::new(clean_name.to_string()))
+                .entry(original_name.clone())
+                .or_insert_with(|| CrateReference::new(original_name))
                 .add_usage(PathBuf::from(""));
         }
     }
@@ -428,6 +434,28 @@ impl DependencyAnalyzer {
         }
 
         clean_code
+    }
+
+    // 完全修飾パスでの参照を検出するメソッド
+    fn scan_for_direct_references(
+        &self,
+        content: &str,
+        crate_refs: &mut HashMap<String, CrateReference>,
+    ) -> Result<()> {
+        // コメントを除去したコンテンツを使用
+        let clean_content = self.remove_comments(content);
+        
+        // 完全修飾パスのパターン（例: serde_json::value::Value）
+        let direct_ref_regex = Regex::new(r"([a-zA-Z_][a-zA-Z0-9_-]*)::([a-zA-Z0-9_:]+)")?;
+        
+        for cap in direct_ref_regex.captures_iter(&clean_content) {
+            let potential_crate = &cap[1];
+            if !is_std_crate(potential_crate) {
+                self.add_crate_if_valid(potential_crate, crate_refs);
+            }
+        }
+        
+        Ok(())
     }
 }
 

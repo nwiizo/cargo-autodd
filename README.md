@@ -4,23 +4,23 @@ A Cargo subcommand that automatically manages dependencies in your Rust projects
 
 ## 🔍 Overview
 
-cargo-autodd simplifies Rust dependency management by automatically adding required crates to your Cargo.toml based on `use` statements and `extern crate` declarations in your code.
+cargo-autodd simplifies Rust dependency management by automatically adding required crates to your Cargo.toml based on `use` statements, `extern crate` declarations, and direct references in your code.
 
 ![cargo-autodd demo](.github/cargo-autodd_01.gif)
 
 ## ✨ Features
 
-- 🔎 Scans Rust source files for imports
+- 🔎 Scans Rust source files for imports and direct references
 - 🤖 Automatically detects required dependencies
-- ⬆️ Updates Cargo.toml with the latest stable versions
+- ⬆️ Updates Cargo.toml with the latest stable versions (including patch versions)
 - 🗑️ Removes unused dependencies
-- 🛠️ Leverages rust-analyzer for better code analysis (when available)
-- 🧹 Removes unused dependencies
 - 📊 Generates dependency usage reports
 - 🔒 Checks for security vulnerabilities
 - 🏢 Supports Cargo workspaces and monorepo structures
 - 🛡️ Handles internal crates with path dependencies correctly
 - 🐛 Debug mode for detailed analysis
+- 🔍 Detects direct references without use statements (e.g., `serde_json::Value`)
+- 🔄 Preserves original crate names (handles dashes and underscores correctly)
 
 ## 📥 Installation
 
@@ -32,13 +32,15 @@ cargo install cargo-autodd
 
 - 🦀 Rust 1.56.0 or later
 - 📦 Cargo
-- 🔧 rust-analyzer (optional, but recommended)
 
 ## 🚀 Usage
 
-### Automatic Dependency Management
+### Command Line Interface
 
 ```bash
+# Show help information
+cargo autodd --help
+
 # Analyze and update dependencies in the current project
 cargo autodd
 
@@ -65,7 +67,7 @@ cargo autodd report
 ### Security Check
 
 ```bash
-# Check for known security vulnerabilities
+# Check for security vulnerabilities
 cargo autodd security
 ```
 
@@ -100,10 +102,10 @@ In debug mode, the following detailed information is displayed:
 ## 🔄 How It Works
 
 1. 📝 Analyzes your Rust source files
-2. 🔍 Detects import statements and external crate declarations
+2. 🔍 Detects import statements, external crate declarations, and direct references
 3. ⚡ Updates Cargo.toml with required dependencies
 4. ✅ Verifies changes with `cargo check`
-5. 🔒 Checks for security vulnerabilities using the RustSec Advisory Database
+5. 🔒 Checks for security vulnerabilities
 6. 📊 Generates detailed reports about dependency usage
 
 ## 🏢 Monorepo Support
