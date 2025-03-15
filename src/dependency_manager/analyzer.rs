@@ -35,7 +35,7 @@ impl DependencyAnalyzer {
         let use_regex = Regex::new(r"^\s*use\s+([a-zA-Z_][a-zA-Z0-9_]*(?:::[a-zA-Z0-9_]*)*)")?;
         let extern_regex = Regex::new(r"^\s*extern\s+crate\s+([a-zA-Z_][a-zA-Z0-9_]*)")?;
 
-        // 既存のCargo.tomlから内部クレート情報を読み取る
+        // Load internal crate information from existing Cargo.toml
         self.load_existing_dependencies(&mut crate_refs)?;
 
         // Walk through all Rust files in the project
@@ -245,19 +245,19 @@ impl DependencyAnalyzer {
                 continue;
             }
 
-            // コメント行をスキップ
+            // Skip comment lines
             if line.starts_with("//") || line.starts_with("/*") {
                 continue;
             }
 
-            // use ステートメントを処理
+            // Process use statements
             if line.starts_with("use") {
-                // 複数行の use ステートメントを収集
+                // Collect multi-line use statements
                 let mut use_statement = line.to_string();
                 let mut brace_count = line.chars().filter(|&c| c == '{').count()
                     - line.chars().filter(|&c| c == '}').count();
 
-                // 中括弧が閉じられるまで続きを読み込む
+                // Continue reading until all braces are closed
                 while brace_count > 0 && current_line_num < lines.len() {
                     let next_line = lines[current_line_num].trim();
                     current_line_num += 1;
@@ -268,12 +268,12 @@ impl DependencyAnalyzer {
                     brace_count -= next_line.chars().filter(|&c| c == '}').count();
                 }
 
-                // use ステートメントからクレート名を抽出
+                // Extract crate names from use statement
                 self.extract_crates_from_use(&use_statement, crate_refs)?;
                 continue;
             }
 
-            // extern crate ステートメントを処理
+            // Process extern crate statements
             if let Some(cap) = extern_regex.captures(line) {
                 let crate_name = cap[1].to_string();
                 if !is_std_crate(&crate_name) {
@@ -291,23 +291,23 @@ impl DependencyAnalyzer {
         Ok(())
     }
 
-    // use ステートメントからクレート名を抽出するメソッド
+    // Method to extract crate names from use statements
     fn extract_crates_from_use(
         &self,
         use_statement: &str,
         crate_refs: &mut HashMap<String, CrateReference>,
     ) -> Result<()> {
-        // コメントを削除
+        // Remove comments
         let clean_use = self.remove_comments(use_statement);
 
         if self.debug {
             println!("Cleaned use statement: {}", clean_use);
         }
 
-        // "use " プレフィックスを削除
+        // Remove "use " prefix
         let statement = clean_use.trim_start_matches("use").trim();
 
-        // 単純な use ステートメント (例: use serde::Serialize;)
+        // Simple use statement (e.g., use serde::Serialize;)
         if !statement.starts_with('{') && statement.contains("::") {
             let parts: Vec<&str> = statement.split("::").collect();
             if !parts.is_empty() {
@@ -315,7 +315,7 @@ impl DependencyAnalyzer {
                 self.add_crate_if_valid(crate_name, crate_refs);
             }
         }
-        // クレート名付きの中括弧 use ステートメント (例: use crate_name::{...};)
+        // Use statement with crate name and braces (e.g., use crate_name::{...};)
         else if !statement.starts_with('{') && statement.contains("::") && statement.contains('{')
         {
             let parts: Vec<&str> = statement.split("::").collect();
@@ -324,19 +324,19 @@ impl DependencyAnalyzer {
                 self.add_crate_if_valid(crate_name, crate_refs);
             }
         }
-        // 中括弧付きの use ステートメント (例: use {crate1, crate2::module, crate3::{...}};)
+        // Use statement with braces (e.g., use {crate1, crate2::module, crate3::{...}};)
         else if statement.starts_with('{') {
-            // 中括弧の内容を抽出
+            // Extract content inside braces
             let content = &statement[1..statement.rfind('}').unwrap_or(statement.len())];
 
-            // カンマで区切られた各項目を処理
+            // Process each item separated by commas
             for item in content.split(',') {
                 let item = item.trim();
                 if item.is_empty() {
                     continue;
                 }
 
-                // 項目に :: が含まれる場合（例: crate::module または crate::{...}）
+                // Item contains :: (e.g., crate::module or crate::{...})
                 if item.contains("::") {
                     let parts: Vec<&str> = item.split("::").collect();
                     if !parts.is_empty() {
@@ -344,14 +344,14 @@ impl DependencyAnalyzer {
                         self.add_crate_if_valid(crate_name, crate_refs);
                     }
                 }
-                // 単純なクレート名 (例: crate)
+                // Simple crate name (e.g., crate)
                 else {
                     let crate_name = item.trim();
                     self.add_crate_if_valid(crate_name, crate_refs);
                 }
             }
         }
-        // 単純な use ステートメント (例: use tokio;)
+        // Simple use statement (e.g., use tokio;)
         else {
             let crate_name = statement.trim_end_matches(';').trim();
             self.add_crate_if_valid(crate_name, crate_refs);
@@ -360,13 +360,13 @@ impl DependencyAnalyzer {
         Ok(())
     }
 
-    // クレート名が有効な場合に追加するヘルパーメソッド
+    // Helper method to add crate if it's valid
     fn add_crate_if_valid(
         &self,
         crate_name: &str,
         crate_refs: &mut HashMap<String, CrateReference>,
     ) {
-        // クレート名から余分な文字を削除
+        // Remove extra characters from crate name
         let clean_name = crate_name.trim().trim_end_matches(['}', '\n', '\r', ':']);
 
         if !clean_name.is_empty()
@@ -378,10 +378,10 @@ impl DependencyAnalyzer {
             if self.debug {
                 println!("Found crate: {}", clean_name);
             }
-
+            
             // Store the original name to preserve dashes/underscores
             let original_name = clean_name.to_string();
-
+            
             crate_refs
                 .entry(original_name.clone())
                 .or_insert_with(|| CrateReference::new(original_name))
@@ -389,7 +389,7 @@ impl DependencyAnalyzer {
         }
     }
 
-    // コメントを削除するヘルパーメソッド
+    // Helper method to remove comments
     fn remove_comments(&self, code: &str) -> String {
         let mut clean_code = String::new();
         let mut in_line_comment = false;
@@ -436,25 +436,25 @@ impl DependencyAnalyzer {
         clean_code
     }
 
-    // 完全修飾パスでの参照を検出するメソッド
+    // Method to detect direct references in fully qualified paths
     fn scan_for_direct_references(
         &self,
         content: &str,
         crate_refs: &mut HashMap<String, CrateReference>,
     ) -> Result<()> {
-        // コメントを除去したコンテンツを使用
+        // Use content with comments removed
         let clean_content = self.remove_comments(content);
-
-        // 完全修飾パスのパターン（例: serde_json::value::Value）
+        
+        // Pattern for fully qualified paths (e.g., serde_json::value::Value)
         let direct_ref_regex = Regex::new(r"([a-zA-Z_][a-zA-Z0-9_-]*)::([a-zA-Z0-9_:]+)")?;
-
+        
         for cap in direct_ref_regex.captures_iter(&clean_content) {
             let potential_crate = &cap[1];
             if !is_std_crate(potential_crate) {
                 self.add_crate_if_valid(potential_crate, crate_refs);
             }
         }
-
+        
         Ok(())
     }
 }

@@ -137,7 +137,7 @@ impl DependencyUpdater {
         let version = match self.get_latest_version(&crate_ref.name) {
             Ok(v) => v,
             Err(e) => {
-                // crates.ioで見つからない場合、内部クレートの可能性があるため警告を表示して処理を続行
+                // If not found on crates.io, it might be an internal crate, so continue with a warning
                 if self.debug {
                     println!(
                         "Warning: Failed to get version for {}: {}",
@@ -183,7 +183,7 @@ impl DependencyUpdater {
     }
 
     pub fn get_latest_version(&self, crate_name: &str) -> Result<String> {
-        // 内部クレートの場合はエラーを返す
+        // Return an error for internal crates
         if crate_name.contains('-') && crate_name.replace('-', "_") != crate_name {
             let normalized_name = crate_name.replace('-', "_");
             if self.debug {
