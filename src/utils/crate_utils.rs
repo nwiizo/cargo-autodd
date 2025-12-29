@@ -15,8 +15,6 @@ pub fn is_std_crate(name: &str) -> bool {
         "alloc",
         "test",
         "proc_macro",
-        "rand",
-        "libc",
         "collections",
         // Common standard library types that might be mistaken for crates
         "String",
@@ -70,9 +68,27 @@ mod tests {
 
     #[test]
     fn test_is_std_crate() {
+        // Standard library crates
         assert!(is_std_crate("std"));
         assert!(is_std_crate("core"));
+        assert!(is_std_crate("alloc"));
+        assert!(is_std_crate("proc_macro"));
+
+        // Standard library types
+        assert!(is_std_crate("String"));
+        assert!(is_std_crate("Vec"));
+        assert!(is_std_crate("HashMap"));
+
+        // Paths starting with std/core/alloc
+        assert!(is_std_crate("std::collections"));
+        assert!(is_std_crate("core::mem"));
+        assert!(is_std_crate("alloc::vec"));
+
+        // External crates (NOT std)
         assert!(!is_std_crate("serde"));
+        assert!(!is_std_crate("tokio"));
+        assert!(!is_std_crate("rand")); // rand is NOT a std crate
+        assert!(!is_std_crate("libc")); // libc is NOT a std crate
         assert!(!is_std_crate("custom_crate"));
     }
 

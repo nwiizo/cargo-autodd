@@ -16,6 +16,18 @@ fn main() -> Result<()> {
                         .long("debug")
                         .help("Enable debug output"),
                 )
+                .arg(
+                    Arg::with_name("dry-run")
+                        .long("dry-run")
+                        .help("Preview changes without modifying files"),
+                )
+                .arg(
+                    Arg::with_name("config")
+                        .short("c")
+                        .long("config")
+                        .value_name("FILE")
+                        .help("Path to config file (default: .cargo-autodd.toml)"),
+                )
                 .subcommand(
                     SubCommand::with_name("update").about("Update dependencies to latest versions"),
                 )
@@ -41,8 +53,17 @@ fn main() -> Result<()> {
     });
 
     let debug = autodd_matches.is_present("debug");
+    let dry_run = autodd_matches.is_present("dry-run");
     let current_dir = env::current_dir()?;
-    let autodd = CargoAutodd::with_debug(current_dir, debug);
+
+    // Load config
+    let config = if let Some(config_path) = autodd_matches.value_of("config") {
+        cargo_autodd::Config::load(std::path::Path::new(config_path))?
+    } else {
+        cargo_autodd::Config::load_default(&current_dir)?
+    };
+
+    let autodd = CargoAutodd::with_options(current_dir, debug, dry_run, config);
 
     // Handle subcommands
     match autodd_matches.subcommand_name() {

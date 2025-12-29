@@ -16,6 +16,8 @@ pub struct CrateReference {
     pub path: Option<String>,
     /// Whether this crate is marked as not publishable
     pub publish: Option<bool>,
+    /// Whether this crate is a dev-dependency (used only in tests)
+    pub is_dev_dependency: bool,
 }
 
 impl CrateReference {
@@ -27,6 +29,7 @@ impl CrateReference {
             is_path_dependency: false,
             path: None,
             publish: None,
+            is_dev_dependency: false,
         }
     }
 
@@ -38,6 +41,19 @@ impl CrateReference {
             is_path_dependency: true,
             path: Some(path),
             publish: None,
+            is_dev_dependency: false,
+        }
+    }
+
+    pub fn new_dev(name: String) -> Self {
+        Self {
+            name,
+            features: HashSet::new(),
+            used_in: HashSet::new(),
+            is_path_dependency: false,
+            path: None,
+            publish: None,
+            is_dev_dependency: true,
         }
     }
 
@@ -61,6 +77,10 @@ impl CrateReference {
     pub fn set_publish(&mut self, publish: bool) {
         self.publish = Some(publish);
     }
+
+    pub fn set_dev_dependency(&mut self, is_dev: bool) {
+        self.is_dev_dependency = is_dev;
+    }
 }
 
 #[cfg(test)]
@@ -77,6 +97,7 @@ mod tests {
         assert!(!crate_ref.is_path_dependency);
         assert!(crate_ref.path.is_none());
         assert!(crate_ref.publish.is_none());
+        assert!(!crate_ref.is_dev_dependency);
     }
 
     #[test]
@@ -120,5 +141,21 @@ mod tests {
         let mut crate_ref = CrateReference::new("test_crate".to_string());
         crate_ref.set_publish(false);
         assert_eq!(crate_ref.publish, Some(false));
+    }
+
+    #[test]
+    fn test_new_dev() {
+        let crate_ref = CrateReference::new_dev("test_crate".to_string());
+        assert_eq!(crate_ref.name, "test_crate");
+        assert!(crate_ref.is_dev_dependency);
+        assert!(!crate_ref.is_path_dependency);
+    }
+
+    #[test]
+    fn test_set_dev_dependency() {
+        let mut crate_ref = CrateReference::new("test_crate".to_string());
+        assert!(!crate_ref.is_dev_dependency);
+        crate_ref.set_dev_dependency(true);
+        assert!(crate_ref.is_dev_dependency);
     }
 }

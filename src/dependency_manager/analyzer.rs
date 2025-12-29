@@ -32,7 +32,7 @@ impl DependencyAnalyzer {
 
     pub fn analyze_dependencies(&self) -> Result<HashMap<String, CrateReference>> {
         let mut crate_refs = HashMap::new();
-        let use_regex = Regex::new(r"^\s*use\s+([a-zA-Z_][a-zA-Z0-9_]*(?:::[a-zA-Z0-9_]*)*)")?;
+        let mut dev_crate_refs = HashMap::new();
         let extern_regex = Regex::new(r"^\s*extern\s+crate\s+([a-zA-Z_][a-zA-Z0-9_]*)")?;
 
         // Load internal crate information from existing Cargo.toml
@@ -43,35 +43,66 @@ impl DependencyAnalyzer {
             let entry = entry?;
             let path = entry.path();
 
-            // Skip test files and build scripts
-            if path.to_string_lossy().contains("tests/")
-                || path.file_name().is_some_and(|f| f == "build.rs")
-            {
+            // Skip build scripts
+            if path.file_name().is_some_and(|f| f == "build.rs") {
                 continue;
             }
+
+            // Check if this is a test file (in tests/ directory or ends with _test.rs)
+            let is_test_file = path.to_string_lossy().contains("tests/")
+                || path
+                    .file_name()
+                    .is_some_and(|f| f.to_string_lossy().ends_with("_test.rs"));
 
             if path.extension().is_some_and(|ext| ext == "rs") {
                 let content = fs::read_to_string(path)?;
                 let file_path = path.to_path_buf();
 
-                self.analyze_file(FileAnalysisContext {
-                    content: content.trim().to_string(),
-                    file_path: &file_path,
-                    use_regex: &use_regex,
-                    extern_regex: &extern_regex,
-                    crate_refs: &mut crate_refs,
-                })?;
+                if is_test_file {
+                    // Analyze as dev-dependency
+                    self.analyze_file(FileAnalysisContext {
+                        content: content.trim().to_string(),
+                        file_path: &file_path,
+                        extern_regex: &extern_regex,
+                        crate_refs: &mut dev_crate_refs,
+                    })?;
+                } else {
+                    // Analyze as regular dependency
+                    self.analyze_file(FileAnalysisContext {
+                        content: content.trim().to_string(),
+                        file_path: &file_path,
+                        extern_regex: &extern_regex,
+                        crate_refs: &mut crate_refs,
+                    })?;
+                }
             }
         }
 
-        // Filter out dev-dependencies and test-only crates
+        // Filter out test-only crates from regular dependencies
         crate_refs.retain(|name, _| {
             !name.ends_with("_test")
                 && !name.ends_with("_tests")
                 && name != "test"
-                && name != "tempfile"
                 && !name.starts_with("crate")
         });
+
+        // Filter out test-only crates from dev-dependencies and mark them
+        dev_crate_refs.retain(|name, _| {
+            !name.ends_with("_test")
+                && !name.ends_with("_tests")
+                && name != "test"
+                && !name.starts_with("crate")
+        });
+
+        // Mark dev dependencies and merge into crate_refs
+        for (name, mut crate_ref) in dev_crate_refs {
+            // Skip if already exists as regular dependency
+            if crate_refs.contains_key(&name) {
+                continue;
+            }
+            crate_ref.set_dev_dependency(true);
+            crate_refs.insert(name, crate_ref);
+        }
 
         if self.debug {
             println!("\nFinal crate references:");
@@ -85,6 +116,9 @@ impl DependencyAnalyzer {
                 }
                 if let Some(publish) = crate_ref.publish {
                     println!("  Publish: {}", publish);
+                }
+                if crate_ref.is_dev_dependency {
+                    println!("  Dev dependency: true");
                 }
                 println!("  Used in:");
                 for path in &crate_ref.used_in {
@@ -182,30 +216,30 @@ impl DependencyAnalyzer {
                         if self.debug {
                             println!("Dependency {} is an inline table: {:?}", crate_name, val);
                         }
-                        if let Some(inline_table) = val.as_inline_table() {
-                            if let Some(path_value) = inline_table.get("path") {
+                        if let Some(inline_table) = val.as_inline_table()
+                            && let Some(path_value) = inline_table.get("path")
+                        {
+                            if self.debug {
+                                println!("Path value for {}: {:?}", crate_name, path_value);
+                            }
+                            if let Some(path_str) = path_value.as_str() {
+                                let mut crate_ref = CrateReference::with_path(
+                                    crate_name.clone(),
+                                    path_str.to_string(),
+                                );
+                                if let Some(publish_value) = publish {
+                                    crate_ref.set_publish(publish_value);
+                                }
+
                                 if self.debug {
-                                    println!("Path value for {}: {:?}", crate_name, path_value);
-                                }
-                                if let Some(path_str) = path_value.as_str() {
-                                    let mut crate_ref = CrateReference::with_path(
-                                        crate_name.clone(),
-                                        path_str.to_string(),
+                                    println!(
+                                        "Adding path dependency (inline): {} at {}",
+                                        crate_name, path_str
                                     );
-                                    if let Some(publish_value) = publish {
-                                        crate_ref.set_publish(publish_value);
-                                    }
-
-                                    if self.debug {
-                                        println!(
-                                            "Adding path dependency (inline): {} at {}",
-                                            crate_name, path_str
-                                        );
-                                        println!("With publish setting: {:?}", crate_ref.publish);
-                                    }
-
-                                    crate_refs.insert(crate_name, crate_ref);
+                                    println!("With publish setting: {:?}", crate_ref.publish);
                                 }
+
+                                crate_refs.insert(crate_name, crate_ref);
                             }
                         }
                     }
@@ -229,7 +263,6 @@ impl DependencyAnalyzer {
         let FileAnalysisContext {
             content,
             file_path,
-            use_regex: _,
             extern_regex,
             crate_refs,
         } = ctx;
@@ -462,8 +495,6 @@ impl DependencyAnalyzer {
 struct FileAnalysisContext<'a> {
     content: String,
     file_path: &'a PathBuf,
-    #[allow(dead_code)]
-    use_regex: &'a Regex,
     extern_regex: &'a Regex,
     crate_refs: &'a mut HashMap<String, CrateReference>,
 }
@@ -630,13 +661,11 @@ fn main() {
         println!("\nStarting analysis...\n");
 
         let mut crate_refs = HashMap::new();
-        let use_regex = Regex::new(r"^\s*use\s+([a-zA-Z_][a-zA-Z0-9_]*(?:::[a-zA-Z0-9_]*)*)")?;
         let extern_regex = Regex::new(r"^\s*extern\s+crate\s+([a-zA-Z_][a-zA-Z0-9_]*)")?;
 
         analyzer.analyze_file(FileAnalysisContext {
             content: content.trim().to_string(),
             file_path: &file_path,
-            use_regex: &use_regex,
             extern_regex: &extern_regex,
             crate_refs: &mut crate_refs,
         })?;
@@ -704,13 +733,11 @@ fn main() {
         println!("\nStarting analysis...\n");
 
         let mut crate_refs = HashMap::new();
-        let use_regex = Regex::new(r"^\s*use\s+([a-zA-Z_][a-zA-Z0-9_]*(?:::[a-zA-Z0-9_]*)*)")?;
         let extern_regex = Regex::new(r"^\s*extern\s+crate\s+([a-zA-Z_][a-zA-Z0-9_]*)")?;
 
         analyzer.analyze_file(FileAnalysisContext {
             content: content.to_string(),
             file_path: &file_path,
-            use_regex: &use_regex,
             extern_regex: &extern_regex,
             crate_refs: &mut crate_refs,
         })?;
@@ -804,13 +831,11 @@ fn main() {
         println!("\nStarting analysis...\n");
 
         let mut crate_refs = HashMap::new();
-        let use_regex = Regex::new(r"^\s*use\s+([a-zA-Z_][a-zA-Z0-9_]*(?:::[a-zA-Z0-9_]*)*)")?;
         let extern_regex = Regex::new(r"^\s*extern\s+crate\s+([a-zA-Z_][a-zA-Z0-9_]*)")?;
 
         analyzer.analyze_file(FileAnalysisContext {
             content: content.to_string(),
             file_path: &file_path,
-            use_regex: &use_regex,
             extern_regex: &extern_regex,
             crate_refs: &mut crate_refs,
         })?;
@@ -842,6 +867,264 @@ fn main() {
         assert!(
             !crate_refs.contains_key("rand"),
             "rand should not be detected (commented out)"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_filter_test_crates() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+
+        // Create Cargo.toml
+        let cargo_toml_content = r#"
+[package]
+name = "test-package"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+"#;
+        let cargo_toml_path = temp_dir.path().join("Cargo.toml");
+        let mut file = File::create(&cargo_toml_path)?;
+        writeln!(file, "{}", cargo_toml_content)?;
+
+        // Create source file with test-related crates
+        fs::create_dir_all(temp_dir.path().join("src"))?;
+        let main_rs_path = temp_dir.path().join("src/main.rs");
+        let main_rs_content = r#"
+use serde::Serialize;
+use my_crate_test;
+use another_tests;
+use test;
+use tempfile;
+use crate::internal;
+use self::module;
+use super::parent;
+
+fn main() {}
+"#;
+        let mut file = File::create(main_rs_path)?;
+        writeln!(file, "{}", main_rs_content)?;
+
+        let analyzer = DependencyAnalyzer::new(temp_dir.path().to_path_buf());
+        let crate_refs = analyzer.analyze_dependencies()?;
+
+        // serde should be detected
+        assert!(crate_refs.contains_key("serde"), "serde should be detected");
+
+        // Test-related crates should be filtered out
+        assert!(
+            !crate_refs.contains_key("my_crate_test"),
+            "crates ending with _test should be filtered"
+        );
+        assert!(
+            !crate_refs.contains_key("another_tests"),
+            "crates ending with _tests should be filtered"
+        );
+        assert!(
+            !crate_refs.contains_key("test"),
+            "test crate should be filtered"
+        );
+
+        // Note: tempfile is a legitimate dev-dependency crate, no longer filtered
+
+        // Rust keywords should be filtered out
+        assert!(
+            !crate_refs.contains_key("crate"),
+            "crate keyword should be filtered"
+        );
+        assert!(
+            !crate_refs.contains_key("self"),
+            "self keyword should be filtered"
+        );
+        assert!(
+            !crate_refs.contains_key("super"),
+            "super keyword should be filtered"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_dev_dependencies_from_tests_directory() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+
+        // Create Cargo.toml
+        let cargo_toml_content = r#"
+[package]
+name = "test-package"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+"#;
+        let cargo_toml_path = temp_dir.path().join("Cargo.toml");
+        let mut file = File::create(&cargo_toml_path)?;
+        writeln!(file, "{}", cargo_toml_content)?;
+
+        // Create source file
+        fs::create_dir_all(temp_dir.path().join("src"))?;
+        let main_rs_path = temp_dir.path().join("src/main.rs");
+        let main_rs_content = r#"
+use serde::Serialize;
+
+fn main() {}
+"#;
+        let mut file = File::create(main_rs_path)?;
+        writeln!(file, "{}", main_rs_content)?;
+
+        // Create tests directory with different crates
+        fs::create_dir_all(temp_dir.path().join("tests"))?;
+        let test_rs_path = temp_dir.path().join("tests/integration.rs");
+        let test_rs_content = r#"
+use assert_fs;
+use predicates;
+
+#[test]
+fn test_something() {}
+"#;
+        let mut file = File::create(test_rs_path)?;
+        writeln!(file, "{}", test_rs_content)?;
+
+        let analyzer = DependencyAnalyzer::new(temp_dir.path().to_path_buf());
+        let crate_refs = analyzer.analyze_dependencies()?;
+
+        // serde from src/ should be detected as regular dependency
+        assert!(
+            crate_refs.contains_key("serde"),
+            "serde from src/ should be detected"
+        );
+        assert!(
+            !crate_refs.get("serde").unwrap().is_dev_dependency,
+            "serde should NOT be a dev-dependency"
+        );
+
+        // crates from tests/ should be detected as dev-dependencies
+        assert!(
+            crate_refs.contains_key("assert_fs"),
+            "assert_fs from tests/ should be detected"
+        );
+        assert!(
+            crate_refs.get("assert_fs").unwrap().is_dev_dependency,
+            "assert_fs should be a dev-dependency"
+        );
+
+        assert!(
+            crate_refs.contains_key("predicates"),
+            "predicates from tests/ should be detected"
+        );
+        assert!(
+            crate_refs.get("predicates").unwrap().is_dev_dependency,
+            "predicates should be a dev-dependency"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_skip_build_rs() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+
+        // Create Cargo.toml
+        let cargo_toml_content = r#"
+[package]
+name = "test-package"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+"#;
+        let cargo_toml_path = temp_dir.path().join("Cargo.toml");
+        let mut file = File::create(&cargo_toml_path)?;
+        writeln!(file, "{}", cargo_toml_content)?;
+
+        // Create source file
+        fs::create_dir_all(temp_dir.path().join("src"))?;
+        let main_rs_path = temp_dir.path().join("src/main.rs");
+        let main_rs_content = r#"
+use serde::Serialize;
+
+fn main() {}
+"#;
+        let mut file = File::create(main_rs_path)?;
+        writeln!(file, "{}", main_rs_content)?;
+
+        // Create build.rs with build dependencies
+        let build_rs_path = temp_dir.path().join("build.rs");
+        let build_rs_content = r#"
+use cc;
+use pkg_config;
+
+fn main() {
+    cc::Build::new().file("src/foo.c").compile("foo");
+}
+"#;
+        let mut file = File::create(build_rs_path)?;
+        writeln!(file, "{}", build_rs_content)?;
+
+        let analyzer = DependencyAnalyzer::new(temp_dir.path().to_path_buf());
+        let crate_refs = analyzer.analyze_dependencies()?;
+
+        // serde from src/ should be detected
+        assert!(
+            crate_refs.contains_key("serde"),
+            "serde from src/ should be detected"
+        );
+
+        // crates from build.rs should NOT be detected
+        assert!(
+            !crate_refs.contains_key("cc"),
+            "cc from build.rs should be skipped"
+        );
+        assert!(
+            !crate_refs.contains_key("pkg_config"),
+            "pkg_config from build.rs should be skipped"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_direct_reference_detection() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+
+        // Create Cargo.toml
+        let cargo_toml_content = r#"
+[package]
+name = "test-package"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+"#;
+        let cargo_toml_path = temp_dir.path().join("Cargo.toml");
+        let mut file = File::create(&cargo_toml_path)?;
+        writeln!(file, "{}", cargo_toml_content)?;
+
+        // Create source file with direct references (no use statement)
+        fs::create_dir_all(temp_dir.path().join("src"))?;
+        let main_rs_path = temp_dir.path().join("src/main.rs");
+        let main_rs_content = r#"
+fn main() {
+    let value: serde_json::Value = serde_json::from_str("{}").unwrap();
+    let regex = regex::Regex::new(r"test").unwrap();
+}
+"#;
+        let mut file = File::create(main_rs_path)?;
+        writeln!(file, "{}", main_rs_content)?;
+
+        let analyzer = DependencyAnalyzer::new(temp_dir.path().to_path_buf());
+        let crate_refs = analyzer.analyze_dependencies()?;
+
+        // Direct references should be detected
+        assert!(
+            crate_refs.contains_key("serde_json"),
+            "serde_json direct reference should be detected"
+        );
+        assert!(
+            crate_refs.contains_key("regex"),
+            "regex direct reference should be detected"
         );
 
         Ok(())

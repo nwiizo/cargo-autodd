@@ -1,3 +1,4 @@
+pub mod config;
 pub mod dependency_manager;
 pub mod models;
 pub mod utils;
@@ -5,33 +6,61 @@ pub mod utils;
 use std::path::PathBuf;
 
 use anyhow::Result;
+pub use config::Config;
 
 pub struct CargoAutodd {
+    #[allow(dead_code)]
+    project_root: PathBuf,
     analyzer: dependency_manager::DependencyAnalyzer,
     updater: dependency_manager::DependencyUpdater,
     reporter: dependency_manager::DependencyReporter,
+    config: Config,
     debug: bool,
+    dry_run: bool,
 }
 
 impl CargoAutodd {
     pub fn new(project_root: PathBuf) -> Self {
+        let config = Config::load_default(&project_root).unwrap_or_default();
         Self {
+            project_root: project_root.clone(),
             analyzer: dependency_manager::DependencyAnalyzer::new(project_root.clone()),
             updater: dependency_manager::DependencyUpdater::new(project_root.clone()),
             reporter: dependency_manager::DependencyReporter::new(project_root),
+            config,
             debug: false,
+            dry_run: false,
         }
     }
 
     pub fn with_debug(project_root: PathBuf, debug: bool) -> Self {
+        let config = Config::load_default(&project_root).unwrap_or_default();
         Self {
+            project_root: project_root.clone(),
             analyzer: dependency_manager::DependencyAnalyzer::with_debug(
                 project_root.clone(),
                 debug,
             ),
             updater: dependency_manager::DependencyUpdater::new(project_root.clone()),
             reporter: dependency_manager::DependencyReporter::new(project_root),
+            config,
             debug,
+            dry_run: false,
+        }
+    }
+
+    pub fn with_options(project_root: PathBuf, debug: bool, dry_run: bool, config: Config) -> Self {
+        Self {
+            project_root: project_root.clone(),
+            analyzer: dependency_manager::DependencyAnalyzer::with_debug(
+                project_root.clone(),
+                debug,
+            ),
+            updater: dependency_manager::DependencyUpdater::new(project_root.clone()),
+            reporter: dependency_manager::DependencyReporter::new(project_root),
+            config,
+            debug,
+            dry_run,
         }
     }
 
@@ -39,8 +68,20 @@ impl CargoAutodd {
         if self.debug {
             println!("🔍 Starting dependency analysis in debug mode...");
         }
+        if self.dry_run {
+            println!("🔍 Running in dry-run mode (no changes will be made)...");
+        }
+
         println!("🔍 Analyzing project dependencies...");
-        let crate_refs = self.analyzer.analyze_dependencies()?;
+        let mut crate_refs = self.analyzer.analyze_dependencies()?;
+
+        // Apply config exclusions
+        crate_refs.retain(|name, _| !self.config.should_exclude(name));
+
+        if self.dry_run {
+            self.print_dry_run_summary(&crate_refs)?;
+            return Ok(());
+        }
 
         if self.debug {
             println!("\n📝 Updating Cargo.toml with found dependencies...");
@@ -49,6 +90,59 @@ impl CargoAutodd {
         self.updater.update_cargo_toml(&crate_refs)?;
 
         println!("✅ Dependencies updated successfully!");
+        Ok(())
+    }
+
+    fn print_dry_run_summary(
+        &self,
+        crate_refs: &std::collections::HashMap<String, models::CrateReference>,
+    ) -> Result<()> {
+        println!("\n📋 Dry-run summary:");
+        println!("==================");
+
+        let (regular, dev): (Vec<_>, Vec<_>) = crate_refs
+            .iter()
+            .partition(|(_, crate_ref)| !crate_ref.is_dev_dependency);
+
+        if !regular.is_empty() {
+            println!("\n[dependencies] would add:");
+            for (name, crate_ref) in regular {
+                if crate_ref.is_path_dependency {
+                    println!(
+                        "  {} = {{ path = \"{}\" }}",
+                        name,
+                        crate_ref.path.as_ref().unwrap_or(&"?".to_string())
+                    );
+                } else {
+                    println!("  {} = \"<latest>\"", name);
+                }
+            }
+        }
+
+        if !dev.is_empty() {
+            println!("\n[dev-dependencies] would add:");
+            for (name, crate_ref) in dev {
+                if crate_ref.is_path_dependency {
+                    println!(
+                        "  {} = {{ path = \"{}\" }}",
+                        name,
+                        crate_ref.path.as_ref().unwrap_or(&"?".to_string())
+                    );
+                } else {
+                    println!("  {} = \"<latest>\"", name);
+                }
+            }
+        }
+
+        // Show config exclusions
+        if !self.config.exclude.is_empty() {
+            println!("\nExcluded by config:");
+            for name in &self.config.exclude {
+                println!("  - {}", name);
+            }
+        }
+
+        println!("\n✅ No changes were made (dry-run mode)");
         Ok(())
     }
 

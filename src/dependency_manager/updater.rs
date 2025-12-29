@@ -41,6 +41,15 @@ impl DependencyUpdater {
         }
     }
 
+    pub fn with_debug(project_root: PathBuf, debug: bool) -> Self {
+        let cargo_toml = project_root.join("Cargo.toml");
+        Self {
+            project_root,
+            cargo_toml,
+            debug,
+        }
+    }
+
     pub fn update_cargo_toml(&self, crate_refs: &HashMap<String, CrateReference>) -> Result<()> {
         let content = fs::read_to_string(&self.cargo_toml)?;
         let mut doc = content.parse::<DocumentMut>()?;
@@ -54,11 +63,37 @@ impl DependencyUpdater {
             return Ok(());
         }
 
+        // Separate regular dependencies and dev-dependencies
+        let (regular_deps, dev_deps): (HashMap<_, _>, HashMap<_, _>) = crate_refs
+            .iter()
+            .partition(|(_, crate_ref)| !crate_ref.is_dev_dependency);
+
         // Get the dependencies path
         let deps_path = self.get_dependencies_path()?;
+        let dev_deps_path = "dev-dependencies".to_string();
 
+        // Update regular dependencies
+        self.update_dependency_section(&mut doc, &regular_deps, &deps_path)?;
+
+        // Update dev-dependencies (only if not a workspace with shared deps)
+        if !is_workspace {
+            self.update_dependency_section(&mut doc, &dev_deps, &dev_deps_path)?;
+        }
+
+        // Write back to Cargo.toml
+        fs::write(&self.cargo_toml, doc.to_string())?;
+
+        Ok(())
+    }
+
+    fn update_dependency_section(
+        &self,
+        doc: &mut DocumentMut,
+        deps_map: &HashMap<&String, &CrateReference>,
+        deps_path: &str,
+    ) -> Result<()> {
         // Get existing dependencies
-        let existing_deps = if let Some(deps) = doc.get(&deps_path) {
+        let existing_deps = if let Some(deps) = doc.get(deps_path) {
             if let Some(table) = deps.as_table() {
                 table
                     .iter()
@@ -72,14 +107,17 @@ impl DependencyUpdater {
         };
 
         // Add new dependencies
-        for crate_ref in crate_refs.values() {
+        for crate_ref in deps_map.values() {
             if !existing_deps.contains(&crate_ref.name) {
-                self.add_dependency(&mut doc, crate_ref, &deps_path)?;
+                self.add_dependency(doc, crate_ref, deps_path)?;
             }
         }
 
         // Remove unused dependencies
-        let used_deps = crate_refs.keys().cloned().collect::<HashSet<_>>();
+        let used_deps = deps_map
+            .keys()
+            .map(|k| (*k).clone())
+            .collect::<HashSet<_>>();
         let to_remove = existing_deps
             .iter()
             .filter(|dep| !used_deps.contains(*dep) && !is_essential_dep(dep))
@@ -87,11 +125,8 @@ impl DependencyUpdater {
             .collect::<Vec<_>>();
 
         for dep in to_remove {
-            self.remove_dependency(&mut doc, &dep, &deps_path)?;
+            self.remove_dependency(doc, &dep, deps_path)?;
         }
-
-        // Write back to Cargo.toml
-        fs::write(&self.cargo_toml, doc.to_string())?;
 
         Ok(())
     }
@@ -103,34 +138,34 @@ impl DependencyUpdater {
         deps_path: &str,
     ) -> Result<()> {
         // For internal crates (path dependencies), add without searching on crates.io
-        if crate_ref.is_path_dependency {
-            if let Some(path) = &crate_ref.path {
-                if self.debug {
-                    println!(
-                        "Adding path dependency: {} with path {}",
-                        crate_ref.name, path
-                    );
-                }
-
-                // Get or create the dependencies table
-                let deps = doc
-                    .entry(deps_path)
-                    .or_insert(toml_edit::table())
-                    .as_table_mut()
-                    .ok_or_else(|| anyhow::anyhow!("Failed to get dependencies table"))?;
-
-                // Add internal crate as path dependency
-                let mut table = Table::new();
-                table["path"] = toml_edit::value(path.clone());
-
-                // Add publish setting if available
-                if let Some(publish) = crate_ref.publish {
-                    table["publish"] = toml_edit::value(publish);
-                }
-
-                deps[&crate_ref.name] = toml_edit::Item::Table(table);
-                return Ok(());
+        if crate_ref.is_path_dependency
+            && let Some(path) = &crate_ref.path
+        {
+            if self.debug {
+                println!(
+                    "Adding path dependency: {} with path {}",
+                    crate_ref.name, path
+                );
             }
+
+            // Get or create the dependencies table
+            let deps = doc
+                .entry(deps_path)
+                .or_insert(toml_edit::table())
+                .as_table_mut()
+                .ok_or_else(|| anyhow::anyhow!("Failed to get dependencies table"))?;
+
+            // Add internal crate as path dependency
+            let mut table = Table::new();
+            table["path"] = toml_edit::value(path.clone());
+
+            // Add publish setting if available
+            if let Some(publish) = crate_ref.publish {
+                table["publish"] = toml_edit::value(publish);
+            }
+
+            deps[&crate_ref.name] = toml_edit::Item::Table(table);
+            return Ok(());
         }
 
         // For regular dependencies, get the latest version from crates.io
@@ -171,10 +206,10 @@ impl DependencyUpdater {
         if deps_path.contains('.') {
             // Handle nested table path like "workspace.dependencies"
             let parts: Vec<&str> = deps_path.split('.').collect();
-            if let Some(Item::Table(parent)) = doc.get_mut(parts[0]) {
-                if let Some(Item::Table(deps)) = parent.get_mut(parts[1]) {
-                    deps.remove(name);
-                }
+            if let Some(Item::Table(parent)) = doc.get_mut(parts[0])
+                && let Some(Item::Table(deps)) = parent.get_mut(parts[1])
+            {
+                deps.remove(name);
             }
         } else if let Some(Item::Table(deps)) = doc.get_mut(deps_path) {
             deps.remove(name);
@@ -416,6 +451,139 @@ tokio = "1.0"
         create_workspace_cargo_toml(&temp_dir);
         let updater = DependencyUpdater::new(temp_dir.path().to_path_buf());
         assert!(updater.is_workspace()?);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_remove_unused_dependency() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+
+        // Create Cargo.toml with multiple dependencies
+        let path = temp_dir.path().join("Cargo.toml");
+        let content = r#"
+[package]
+name = "test-package"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = "1.0"
+tokio = "1.0"
+unused_crate = "0.1"
+another_unused = "0.2"
+"#;
+        let mut file = File::create(&path)?;
+        writeln!(file, "{}", content)?;
+
+        let updater = DependencyUpdater::new(temp_dir.path().to_path_buf());
+        let mut crate_refs = HashMap::new();
+
+        // Only serde and tokio are used
+        crate_refs.insert(
+            "serde".to_string(),
+            CrateReference::new("serde".to_string()),
+        );
+        crate_refs.insert(
+            "tokio".to_string(),
+            CrateReference::new("tokio".to_string()),
+        );
+
+        updater.update_cargo_toml(&crate_refs)?;
+
+        // Verify unused dependencies are removed
+        let result = fs::read_to_string(&path)?;
+        assert!(result.contains("serde"), "serde should remain");
+        assert!(result.contains("tokio"), "tokio should remain");
+        assert!(
+            !result.contains("unused_crate"),
+            "unused_crate should be removed"
+        );
+        assert!(
+            !result.contains("another_unused"),
+            "another_unused should be removed"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_preserve_essential_dependencies() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+
+        // Create Cargo.toml with essential dependencies
+        let path = temp_dir.path().join("Cargo.toml");
+        let content = r#"
+[package]
+name = "test-package"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = "1.0"
+tokio = "1.0"
+anyhow = "1.0"
+thiserror = "1.0"
+unused_crate = "0.1"
+"#;
+        let mut file = File::create(&path)?;
+        writeln!(file, "{}", content)?;
+
+        let updater = DependencyUpdater::new(temp_dir.path().to_path_buf());
+
+        // Empty crate_refs - nothing is used
+        let crate_refs = HashMap::new();
+
+        updater.update_cargo_toml(&crate_refs)?;
+
+        // Verify essential dependencies are preserved even if not used
+        let result = fs::read_to_string(&path)?;
+        assert!(
+            result.contains("serde"),
+            "serde (essential) should be preserved"
+        );
+        assert!(
+            result.contains("tokio"),
+            "tokio (essential) should be preserved"
+        );
+        assert!(
+            result.contains("anyhow"),
+            "anyhow (essential) should be preserved"
+        );
+        assert!(
+            result.contains("thiserror"),
+            "thiserror (essential) should be preserved"
+        );
+        assert!(
+            !result.contains("unused_crate"),
+            "non-essential unused_crate should be removed"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_dependency_version() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        create_cargo_toml(&temp_dir);
+
+        let updater = DependencyUpdater::new(temp_dir.path().to_path_buf());
+
+        // Test simple version string
+        let simple_version = toml_edit::value("1.0.0");
+        assert_eq!(
+            updater.get_dependency_version(&simple_version),
+            Some("1.0.0".to_string())
+        );
+
+        // Test table with version
+        let mut table = toml_edit::Table::new();
+        table["version"] = toml_edit::value("2.0.0");
+        let table_version = toml_edit::Item::Table(table);
+        assert_eq!(
+            updater.get_dependency_version(&table_version),
+            Some("2.0.0".to_string())
+        );
 
         Ok(())
     }
