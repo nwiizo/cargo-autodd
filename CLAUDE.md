@@ -36,3 +36,4 @@ cargo run -- autodd --dry-run                  # Preview changes
 | `/e2e-test` | Run E2E test suite |
 | `/similarity` | Detect code similarities |
 | `/mutants` | Run mutation testing |
+| `/coupling` | Analyze coupling (Khononov) |
