@@ -21,6 +21,9 @@ cargo-autodd simplifies Rust dependency management by automatically adding requi
 - 🐛 Debug mode for detailed analysis
 - 🔍 Detects direct references without use statements (e.g., `serde_json::Value`)
 - 🔄 Preserves original crate names (handles dashes and underscores correctly)
+- 👀 Dry-run mode to preview changes without modifying files
+- ⚙️ Configuration file support (`.cargo-autodd.toml`)
+- 🧪 Auto-detects dev-dependencies from `tests/` directory
 
 ## 📥 Installation
 
@@ -44,10 +47,18 @@ cargo autodd --help
 # Analyze and update dependencies in the current project
 cargo autodd
 
+# Preview changes without modifying files (dry-run)
+cargo autodd --dry-run
+
 # Run with debug mode for detailed analysis
 cargo autodd --debug
 # or
 cargo autodd -d
+
+# Use custom config file
+cargo autodd --config /path/to/.cargo-autodd.toml
+# or
+cargo autodd -c /path/to/.cargo-autodd.toml
 ```
 
 ### Update Dependencies
@@ -99,14 +110,55 @@ In debug mode, the following detailed information is displayed:
 - 📊 Analysis results of each file
 - 📋 Final list of crate references
 
+### Dry-Run Mode
+
+Preview what changes would be made without actually modifying files:
+
+```bash
+cargo autodd --dry-run
+```
+
+This shows:
+- Dependencies that would be added
+- Dependencies that would be removed
+- Dev-dependencies detected from `tests/` directory
+
+## ⚙️ Configuration
+
+Create a `.cargo-autodd.toml` file in your project root to customize behavior:
+
+```toml
+# Crates to exclude from analysis (e.g., internal crates, false positives)
+exclude = ["internal_crate", "another_internal"]
+
+# Additional essential dependencies (never removed automatically)
+essential = ["custom_essential_lib"]
+
+# Crates to always treat as dev-dependencies
+dev_only = ["proptest", "criterion"]
+
+# Skip tests/ directory analysis entirely
+skip_tests = false
+```
+
+### Configuration Options
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `exclude` | Array | Crates to skip during analysis |
+| `essential` | Array | Additional crates that should never be removed |
+| `dev_only` | Array | Crates to always add as dev-dependencies |
+| `skip_tests` | Boolean | If true, skip analyzing `tests/` directory |
+
 ## 🔄 How It Works
 
 1. 📝 Analyzes your Rust source files
 2. 🔍 Detects import statements, external crate declarations, and direct references
-3. ⚡ Updates Cargo.toml with required dependencies
-4. ✅ Verifies changes with `cargo check`
-5. 🔒 Checks for security vulnerabilities
-6. 📊 Generates detailed reports about dependency usage
+3. 🧪 Crates used only in `tests/` directory are added to `[dev-dependencies]`
+4. ⚡ Updates Cargo.toml with required dependencies
+5. ✅ Verifies changes with `cargo check`
+6. 🔒 Checks for security vulnerabilities
+7. 📊 Generates detailed reports about dependency usage
 
 ## 🏢 Monorepo Support
 
