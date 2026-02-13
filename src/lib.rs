@@ -20,9 +20,9 @@ pub struct CargoAutodd {
 }
 
 impl CargoAutodd {
-    pub fn new(project_root: PathBuf) -> Self {
-        let config = Config::load_default(&project_root).unwrap_or_default();
-        Self {
+    pub fn new(project_root: PathBuf) -> Result<Self> {
+        let config = Config::load_default(&project_root)?;
+        Ok(Self {
             project_root: project_root.clone(),
             analyzer: dependency_manager::DependencyAnalyzer::new(project_root.clone()),
             updater: dependency_manager::DependencyUpdater::new(project_root.clone()),
@@ -30,12 +30,12 @@ impl CargoAutodd {
             config,
             debug: false,
             dry_run: false,
-        }
+        })
     }
 
-    pub fn with_debug(project_root: PathBuf, debug: bool) -> Self {
-        let config = Config::load_default(&project_root).unwrap_or_default();
-        Self {
+    pub fn with_debug(project_root: PathBuf, debug: bool) -> Result<Self> {
+        let config = Config::load_default(&project_root)?;
+        Ok(Self {
             project_root: project_root.clone(),
             analyzer: dependency_manager::DependencyAnalyzer::with_debug(
                 project_root.clone(),
@@ -46,7 +46,7 @@ impl CargoAutodd {
             config,
             debug,
             dry_run: false,
-        }
+        })
     }
 
     pub fn with_options(project_root: PathBuf, debug: bool, dry_run: bool, config: Config) -> Self {
@@ -208,7 +208,7 @@ use tokio;
     #[test]
     fn test_analyze_and_update() -> Result<()> {
         let temp_dir = create_test_environment()?;
-        let autodd = CargoAutodd::new(temp_dir.path().to_path_buf());
+        let autodd = CargoAutodd::new(temp_dir.path().to_path_buf())?;
         autodd.analyze_and_update()?;
         Ok(())
     }
@@ -216,7 +216,7 @@ use tokio;
     #[test]
     fn test_generate_report() -> Result<()> {
         let temp_dir = create_test_environment()?;
-        let autodd = CargoAutodd::new(temp_dir.path().to_path_buf());
+        let autodd = CargoAutodd::new(temp_dir.path().to_path_buf())?;
         autodd.generate_report()?;
         Ok(())
     }
@@ -224,8 +224,27 @@ use tokio;
     #[test]
     fn test_check_security() -> Result<()> {
         let temp_dir = create_test_environment()?;
-        let autodd = CargoAutodd::new(temp_dir.path().to_path_buf());
+        let autodd = CargoAutodd::new(temp_dir.path().to_path_buf())?;
         autodd.check_security()?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_dry_run_does_not_modify_cargo_toml() -> Result<()> {
+        let temp_dir = create_test_environment()?;
+
+        let cargo_toml_path = temp_dir.path().join("Cargo.toml");
+        let before = std::fs::read_to_string(&cargo_toml_path)?;
+
+        let config = Config::default();
+        let autodd = CargoAutodd::with_options(temp_dir.path().to_path_buf(), false, true, config);
+        autodd.analyze_and_update()?;
+
+        let after = std::fs::read_to_string(&cargo_toml_path)?;
+        assert_eq!(
+            before, after,
+            "Cargo.toml should not be modified in dry-run mode"
+        );
         Ok(())
     }
 }

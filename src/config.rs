@@ -123,4 +123,43 @@ exclude = ["internal_crate"]
 
         Ok(())
     }
+
+    #[test]
+    fn test_load_malformed_toml() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join(".cargo-autodd.toml");
+
+        let mut file = fs::File::create(&config_path).unwrap();
+        write!(file, "invalid {{ toml").unwrap();
+
+        let result = Config::load(&config_path);
+        assert!(result.is_err(), "Malformed TOML should return an error");
+    }
+
+    #[test]
+    fn test_load_wrong_types_in_config() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join(".cargo-autodd.toml");
+
+        // exclude should be an array, not a number
+        let mut file = fs::File::create(&config_path).unwrap();
+        write!(file, "exclude = 42").unwrap();
+
+        let result = Config::load(&config_path);
+        assert!(
+            result.is_err(),
+            "Wrong type for exclude should return an error"
+        );
+    }
+
+    #[test]
+    fn test_load_nonexistent_file() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        // load_default on a dir with no config file should return default
+        let config = Config::load_default(temp_dir.path())?;
+        assert!(config.exclude.is_empty());
+        assert!(config.essential.is_empty());
+        assert!(!config.skip_tests);
+        Ok(())
+    }
 }

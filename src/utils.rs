@@ -1,9 +1,32 @@
-use std::path::Path;
+use toml_edit::DocumentMut;
 
-/// Checks if a path represents a hidden file or directory
-pub fn is_hidden(path: &Path) -> bool {
-    path.components()
-        .any(|c| c.as_os_str().to_string_lossy().starts_with('.'))
+/// Resolve the correct dependencies table path based on whether the document
+/// is a workspace with workspace.dependencies.
+pub fn resolve_deps_table_path(doc: &DocumentMut) -> &'static str {
+    if doc
+        .get("workspace")
+        .and_then(|t| t.as_table())
+        .and_then(|t| t.get("dependencies"))
+        .is_some()
+    {
+        "workspace.dependencies"
+    } else {
+        "dependencies"
+    }
+}
+
+/// Get the dependencies table from a TOML document, handling both
+/// workspace.dependencies and regular dependencies paths.
+pub fn get_deps_table<'a>(doc: &'a DocumentMut, deps_path: &str) -> Option<&'a toml_edit::Table> {
+    if deps_path.contains('.') {
+        let parts: Vec<&str> = deps_path.split('.').collect();
+        doc.get(parts[0])
+            .and_then(|t| t.as_table())
+            .and_then(|t| t.get(parts[1]))
+            .and_then(|t| t.as_table())
+    } else {
+        doc.get(deps_path).and_then(|t| t.as_table())
+    }
 }
 
 /// Checks if a crate name represents a standard library crate or type
@@ -57,14 +80,6 @@ pub fn is_essential_dep(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_is_hidden() {
-        assert!(is_hidden(Path::new(".git")));
-        assert!(is_hidden(Path::new("/path/to/.hidden")));
-        assert!(!is_hidden(Path::new("visible")));
-        assert!(!is_hidden(Path::new("/path/to/visible")));
-    }
 
     #[test]
     fn test_is_std_crate() {
