@@ -108,7 +108,9 @@ impl DependencyUpdater {
 
         // Add new dependencies
         for crate_ref in deps_map.values() {
-            if !existing_deps.contains(&crate_ref.name) {
+            // Check if dependency exists by comparing normalized names
+            let exists = existing_deps.iter().any(|dep| dep.replace('-', "_") == crate_ref.name);
+            if !exists {
                 self.add_dependency(doc, crate_ref, deps_path)?;
             }
         }
@@ -120,7 +122,10 @@ impl DependencyUpdater {
             .collect::<HashSet<_>>();
         let to_remove = existing_deps
             .iter()
-            .filter(|dep| !used_deps.contains(*dep) && !is_essential_dep(dep))
+            .filter(|dep| {
+                let normalized = dep.replace('-', "_");
+                !used_deps.contains(&normalized) && !is_essential_dep(dep)
+            })
             .cloned()
             .collect::<Vec<_>>();
 
