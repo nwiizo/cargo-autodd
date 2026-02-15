@@ -34,6 +34,12 @@ pub fn is_std_crate(name: &str) -> bool {
         "RefCell",
         "Mutex",
         "RwLock",
+        // Common standard library traits
+        "Default",
+        "Clone",
+        "Copy",
+        "Debug",
+        "Display",
     ];
     std_crates.contains(&name)
         || name.starts_with("std::")
