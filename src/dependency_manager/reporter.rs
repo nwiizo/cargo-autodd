@@ -63,7 +63,7 @@ impl DependencyReporter {
                     }
                 }
 
-                if let Some(crate_ref) = crate_refs.get(name) {
+                if let Some(crate_ref) = crate_refs.get(&name.replace('-', "_")) {
                     println!("  Used in {} file(s)", crate_ref.usage_count());
                     println!("  Usage locations:");
                     for path in &crate_ref.used_in {

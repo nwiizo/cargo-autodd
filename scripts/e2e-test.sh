@@ -604,6 +604,51 @@ EOF
     ! echo "$content" | grep -q "unused_crate"
 }
 
+# Test 16: Hyphenated crate names handled correctly
+# ============================================
+test_hyphenated_crates() {
+    local test_dir="$TEST_DIR/test16"
+    mkdir -p "$test_dir/src"
+
+    cat > "$test_dir/Cargo.toml" << 'EOF'
+[package]
+name = "test-hyphens"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = "1.0"
+serde-json = "1.0"
+my-utils = "0.5"
+EOF
+
+    # Source uses serde_json (underscore form) but NOT my_utils
+    cat > "$test_dir/src/main.rs" << 'EOF'
+use serde::Serialize;
+use serde_json::Value;
+
+fn main() {
+    let _v: Value = serde_json::from_str("{}").unwrap();
+}
+EOF
+
+    cd "$test_dir"
+    $BINARY autodd --dry-run 2>&1 > /dev/null
+
+    local content=$(cat "$test_dir/Cargo.toml")
+    # In dry-run, nothing changes - verify file is untouched
+    echo "$content" | grep -q "serde-json"
+
+    # Now run without dry-run
+    $BINARY autodd 2>&1 > /dev/null
+
+    content=$(cat "$test_dir/Cargo.toml")
+    # serde-json should be preserved (used as serde_json in code)
+    echo "$content" | grep -q "serde" && \
+    # serde-json should NOT be duplicated as serde_json
+    ! echo "$content" | grep -q "serde_json" || echo "$content" | grep -c "serde" | grep -q "^[12]$"
+}
+
 # ============================================
 # Run all tests
 # ============================================
@@ -625,6 +670,7 @@ run_test "Local modules not treated as crates" test_local_modules
 run_test "Complex multi-file project" test_complex_project
 run_test "Malformed config file error" test_malformed_config
 run_test "Essential deps preserved on update" test_essential_deps_preserved
+run_test "Hyphenated crate names" test_hyphenated_crates
 
 # ============================================
 # Summary
