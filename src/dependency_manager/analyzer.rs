@@ -38,8 +38,17 @@ impl DependencyAnalyzer {
         // Load internal crate information from existing Cargo.toml
         self.load_existing_dependencies(&mut crate_refs)?;
 
-        // Walk through all Rust files in the project
-        for entry in WalkDir::new(&self.project_root) {
+        // Walk through all Rust files in the project, skipping target/ and hidden directories
+        for entry in WalkDir::new(&self.project_root)
+            .into_iter()
+            .filter_entry(|e| {
+                if e.depth() == 0 {
+                    return true;
+                }
+                let name = e.file_name().to_string_lossy();
+                !(e.file_type().is_dir() && (name == "target" || name.starts_with('.')))
+            })
+        {
             let entry = entry?;
             let path = entry.path();
 
@@ -96,6 +105,18 @@ impl DependencyAnalyzer {
             }
             crate_ref.set_dev_dependency(true);
             crate_refs.insert(name, crate_ref);
+        }
+
+        // Filter own package name (after merge so it covers both regular and dev)
+        if let Ok(content) = fs::read_to_string(self.project_root.join("Cargo.toml"))
+            && let Ok(doc) = content.parse::<DocumentMut>()
+            && let Some(name) = doc
+                .get("package")
+                .and_then(|p| p.get("name"))
+                .and_then(|n| n.as_str())
+        {
+            crate_refs.remove(name);
+            crate_refs.remove(&name.replace('-', "_"));
         }
 
         if self.debug {
@@ -351,6 +372,7 @@ impl<'a> CrateVisitor<'a> {
             || crate_name == "crate"
             || crate_name == "self"
             || crate_name == "super"
+            || crate_name == "Self"
         {
             return;
         }
@@ -370,7 +392,12 @@ impl<'a> CrateVisitor<'a> {
             .add_usage(self.file_path.clone());
     }
 
-    fn extract_crate_from_use_tree(&mut self, tree: &UseTree, is_root: bool) {
+    fn extract_crate_from_use_tree(
+        &mut self,
+        tree: &UseTree,
+        is_root: bool,
+        parent_ident: Option<&str>,
+    ) {
         match tree {
             UseTree::Path(path) => {
                 let segment = path.ident.to_string();
@@ -380,8 +407,8 @@ impl<'a> CrateVisitor<'a> {
                     self.add_crate(&segment);
                 }
 
-                // Recursively visit the rest of the tree
-                self.extract_crate_from_use_tree(&path.tree, false);
+                // Recursively visit the rest of the tree, passing current segment as parent
+                self.extract_crate_from_use_tree(&path.tree, false, Some(&segment));
             }
             UseTree::Name(name) => {
                 let name_str = name.ident.to_string();
@@ -392,9 +419,19 @@ impl<'a> CrateVisitor<'a> {
                     self.add_crate(&name_str);
                 }
 
-                // Add to current scope
-                if let Some(current_scope) = self.scope_stack.last_mut() {
-                    current_scope.insert(name_str);
+                // Handle `{self}` in group imports: `use syn::visit::{self, Visit}`
+                // When name is "self", the parent segment is the actual imported name
+                if name_str == "self" {
+                    if let Some(parent) = parent_ident
+                        && let Some(current_scope) = self.scope_stack.last_mut()
+                    {
+                        current_scope.insert(parent.to_string());
+                    }
+                } else {
+                    // Add to current scope
+                    if let Some(current_scope) = self.scope_stack.last_mut() {
+                        current_scope.insert(name_str);
+                    }
                 }
             }
             UseTree::Rename(rename) => {
@@ -417,9 +454,9 @@ impl<'a> CrateVisitor<'a> {
             }
             UseTree::Group(group) => {
                 // use foo::{bar, baz} or use {foo, bar}
-                // Each item in the group inherits the root status
+                // Each item in the group inherits the root status and parent_ident
                 for tree in &group.items {
-                    self.extract_crate_from_use_tree(tree, is_root);
+                    self.extract_crate_from_use_tree(tree, is_root, parent_ident);
                 }
             }
         }
@@ -429,7 +466,7 @@ impl<'a> CrateVisitor<'a> {
 impl<'a> Visit<'a> for CrateVisitor<'a> {
     fn visit_item_use(&mut self, node: &'a ItemUse) {
         // Extract crate name from the use tree (is_root = true for top level)
-        self.extract_crate_from_use_tree(&node.tree, true);
+        self.extract_crate_from_use_tree(&node.tree, true, None);
 
         // Continue visiting
         visit::visit_item_use(self, node);
@@ -502,6 +539,11 @@ impl<'a> PathVisitor<'a> {
 
         // Skip if it's a keyword
         if first_segment == "crate" || first_segment == "self" || first_segment == "super" {
+            return;
+        }
+
+        // Rust crate names are always lowercase; skip type/struct references like Config::load()
+        if first_segment.starts_with(char::is_uppercase) {
             return;
         }
 

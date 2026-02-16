@@ -3,10 +3,12 @@ pub mod dependency_manager;
 pub mod models;
 pub mod utils;
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use anyhow::Result;
 pub use config::Config;
+use toml_edit::DocumentMut;
 
 pub struct CargoAutodd {
     #[allow(dead_code)]
@@ -100,13 +102,49 @@ impl CargoAutodd {
         println!("\n📋 Dry-run summary:");
         println!("==================");
 
+        // Read existing dependency names from Cargo.toml
+        let mut existing_deps = HashSet::new();
+        let mut existing_dev_deps = HashSet::new();
+        let cargo_toml_path = self.project_root.join("Cargo.toml");
+        if let Ok(content) = std::fs::read_to_string(&cargo_toml_path)
+            && let Ok(doc) = content.parse::<DocumentMut>()
+        {
+            if let Some(deps) = doc.get("dependencies").and_then(|d| d.as_table()) {
+                for (name, _) in deps.iter() {
+                    existing_deps.insert(name.to_string());
+                }
+            }
+            if let Some(deps) = doc.get("dev-dependencies").and_then(|d| d.as_table()) {
+                for (name, _) in deps.iter() {
+                    existing_dev_deps.insert(name.to_string());
+                }
+            }
+        }
+
         let (regular, dev): (Vec<_>, Vec<_>) = crate_refs
             .iter()
             .partition(|(_, crate_ref)| !crate_ref.is_dev_dependency);
 
-        if !regular.is_empty() {
+        // All existing deps (both regular and dev) for dedup
+        let all_existing: HashSet<_> = existing_deps.union(&existing_dev_deps).collect();
+
+        // Categorize regular dependencies
+        let (new_regular, tracked_regular): (Vec<_>, Vec<_>) =
+            regular.into_iter().partition(|(name, _)| {
+                let hyphenated = name.replace('_', "-");
+                !all_existing.contains(name) && !all_existing.contains(&hyphenated)
+            });
+
+        // Categorize dev dependencies
+        let (new_dev, tracked_dev): (Vec<_>, Vec<_>) = dev.into_iter().partition(|(name, _)| {
+            let hyphenated = name.replace('_', "-");
+            !all_existing.contains(name) && !all_existing.contains(&hyphenated)
+        });
+
+        // Would add (new deps only)
+        if !new_regular.is_empty() {
             println!("\n[dependencies] would add:");
-            for (name, crate_ref) in regular {
+            for (name, crate_ref) in &new_regular {
                 if crate_ref.is_path_dependency {
                     println!(
                         "  {} = {{ path = \"{}\" }}",
@@ -119,9 +157,9 @@ impl CargoAutodd {
             }
         }
 
-        if !dev.is_empty() {
+        if !new_dev.is_empty() {
             println!("\n[dev-dependencies] would add:");
-            for (name, crate_ref) in dev {
+            for (name, crate_ref) in &new_dev {
                 if crate_ref.is_path_dependency {
                     println!(
                         "  {} = {{ path = \"{}\" }}",
@@ -131,6 +169,37 @@ impl CargoAutodd {
                 } else {
                     println!("  {} = \"<latest>\"", name);
                 }
+            }
+        }
+
+        // Would remove (existing deps not found in analysis, excluding essential)
+        let analyzed_names: HashSet<&str> = crate_refs.keys().map(|s| s.as_str()).collect();
+        let would_remove: Vec<_> = existing_deps
+            .iter()
+            .filter(|name| {
+                let normalized = name.replace('-', "_");
+                !analyzed_names.contains(name.as_str())
+                    && !analyzed_names.contains(normalized.as_str())
+                    && !utils::is_essential_dep(name)
+                    && !self.config.is_essential(name)
+            })
+            .collect();
+
+        if !would_remove.is_empty() {
+            println!("\n[dependencies] would remove:");
+            for name in &would_remove {
+                println!("  - {}", name);
+            }
+        }
+
+        // Already tracked
+        if !tracked_regular.is_empty() || !tracked_dev.is_empty() {
+            println!("\nAlready tracked:");
+            for (name, _) in &tracked_regular {
+                println!("  ✓ {}", name);
+            }
+            for (name, _) in &tracked_dev {
+                println!("  ✓ {} (dev)", name);
             }
         }
 
@@ -142,7 +211,11 @@ impl CargoAutodd {
             }
         }
 
-        println!("\n✅ No changes were made (dry-run mode)");
+        if new_regular.is_empty() && new_dev.is_empty() && would_remove.is_empty() {
+            println!("\n✅ No changes needed (all dependencies are in sync)");
+        } else {
+            println!("\n✅ No changes were made (dry-run mode)");
+        }
         Ok(())
     }
 
