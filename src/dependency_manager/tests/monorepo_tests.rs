@@ -140,7 +140,7 @@ fn test_monorepo_update_with_internal_crates() -> Result<()> {
     let public_crate_path = root_path.join("public-crate");
 
     // Create CargoAutodd instance
-    let autodd = CargoAutodd::with_debug(public_crate_path, true);
+    let autodd = CargoAutodd::with_debug(public_crate_path, true)?;
 
     // Execute dependency update
     let result = autodd.analyze_and_update();
@@ -179,7 +179,7 @@ fn test_monorepo_with_publish_false_crates() -> Result<()> {
     let internal_crate_path = root_path.join("internal-crate");
 
     // Create CargoAutodd instance
-    let autodd = CargoAutodd::with_debug(internal_crate_path, true);
+    let autodd = CargoAutodd::with_debug(internal_crate_path, true)?;
 
     // Execute dependency update
     let result = autodd.analyze_and_update();

@@ -368,6 +368,243 @@ EOF
 }
 
 # ============================================
+# Test 11: Imported names not treated as crates
+# ============================================
+test_imported_names() {
+    local test_dir="$TEST_DIR/test11"
+    mkdir -p "$test_dir/src"
+
+    cat > "$test_dir/Cargo.toml" << 'EOF'
+[package]
+name = "test-imported-names"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+EOF
+
+    cat > "$test_dir/src/main.rs" << 'EOF'
+use serde::Serialize;
+use tokio::sync::Mutex;
+
+fn main() {
+    // Serialize and Mutex are imported names, NOT crates
+    let _s = Serialize::default();
+    let _m = Mutex::new(42);
+
+    // regex IS a crate (direct reference, no use statement)
+    let _r = regex::Regex::new(r"test").unwrap();
+}
+EOF
+
+    cd "$test_dir"
+    local output=$($BINARY autodd --dry-run 2>&1)
+    # serde and tokio should be detected as crates
+    echo "$output" | grep -q "serde" && \
+    echo "$output" | grep -q "tokio" && \
+    echo "$output" | grep -q "regex" && \
+    # Serialize and Mutex should NOT appear as separate crates
+    ! echo "$output" | grep -qw "Serialize = " && \
+    ! echo "$output" | grep -qw "Mutex = "
+}
+
+# ============================================
+# Test 12: Local modules not treated as crates
+# ============================================
+test_local_modules() {
+    local test_dir="$TEST_DIR/test12"
+    mkdir -p "$test_dir/src"
+
+    cat > "$test_dir/Cargo.toml" << 'EOF'
+[package]
+name = "test-local-modules"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+EOF
+
+    # Create a local module file
+    cat > "$test_dir/src/helpers.rs" << 'EOF'
+pub fn do_stuff() -> String {
+    "hello".to_string()
+}
+EOF
+
+    cat > "$test_dir/src/main.rs" << 'EOF'
+mod helpers;
+
+use serde::Serialize;
+
+fn main() {
+    // helpers is a local module, NOT a crate
+    helpers::do_stuff();
+}
+EOF
+
+    cd "$test_dir"
+    local output=$($BINARY autodd --dry-run 2>&1)
+    echo "$output" | grep -q "serde" && \
+    ! echo "$output" | grep -qw "helpers = "
+}
+
+# ============================================
+# Test 13: Complex multi-file project
+# ============================================
+test_complex_project() {
+    local test_dir="$TEST_DIR/test13"
+    mkdir -p "$test_dir/src" "$test_dir/tests"
+
+    cat > "$test_dir/Cargo.toml" << 'EOF'
+[package]
+name = "test-complex"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = "1.0"
+EOF
+
+    cat > "$test_dir/src/main.rs" << 'EOF'
+mod config;
+mod utils;
+
+use serde::{Serialize, Deserialize};
+use anyhow::Result;
+
+#[derive(Serialize, Deserialize)]
+struct AppConfig {
+    name: String,
+}
+
+fn main() -> Result<()> {
+    // Direct reference without use statement
+    let re = regex::Regex::new(r"^\d+$")?;
+    let val: serde_json::Value = serde_json::from_str("{}")?;
+    config::load();
+    utils::init();
+    Ok(())
+}
+EOF
+
+    cat > "$test_dir/src/config.rs" << 'EOF'
+use toml;
+
+pub fn load() {
+    let _: toml::Value = toml::from_str("key = 'val'").unwrap();
+}
+EOF
+
+    cat > "$test_dir/src/utils.rs" << 'EOF'
+use log::info;
+
+pub fn init() {
+    info!("initialized");
+}
+EOF
+
+    cat > "$test_dir/tests/integration.rs" << 'EOF'
+use tempfile::TempDir;
+use assert_fs::prelude::*;
+
+#[test]
+fn test_complex_flow() {
+    let tmp = TempDir::new().unwrap();
+    assert!(tmp.path().exists());
+}
+EOF
+
+    cd "$test_dir"
+    local output=$($BINARY autodd --dry-run 2>&1)
+
+    # Regular dependencies from src/
+    echo "$output" | grep -q "anyhow" && \
+    echo "$output" | grep -q "regex" && \
+    echo "$output" | grep -q "serde_json" && \
+    echo "$output" | grep -q "toml" && \
+    echo "$output" | grep -q "log" && \
+    # Dev-dependencies from tests/
+    echo "$output" | grep -q "\[dev-dependencies\]" && \
+    echo "$output" | grep -q "tempfile" && \
+    echo "$output" | grep -q "assert_fs" && \
+    # Local modules should NOT be detected as crates
+    ! echo "$output" | grep -qw "config = " && \
+    ! echo "$output" | grep -qw "utils = "
+}
+
+# ============================================
+# Test 14: Malformed config file error
+# ============================================
+test_malformed_config() {
+    local test_dir="$TEST_DIR/test14"
+    mkdir -p "$test_dir/src"
+
+    cat > "$test_dir/Cargo.toml" << 'EOF'
+[package]
+name = "test-bad-config"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+EOF
+
+    cat > "$test_dir/src/main.rs" << 'EOF'
+fn main() {}
+EOF
+
+    # Create a malformed config file
+    echo "invalid { toml" > "$test_dir/.cargo-autodd.toml"
+
+    cd "$test_dir"
+    # Should fail with a TOML parse error
+    if $BINARY autodd --dry-run 2>&1 | grep -q "TOML parse error"; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# ============================================
+# Test 15: Essential deps preserved on update
+# ============================================
+test_essential_deps_preserved() {
+    local test_dir="$TEST_DIR/test15"
+    mkdir -p "$test_dir/src"
+
+    cat > "$test_dir/Cargo.toml" << 'EOF'
+[package]
+name = "test-essential"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = "1.0"
+tokio = "1.0"
+anyhow = "1.0"
+thiserror = "1.0"
+unused_crate = "0.1"
+EOF
+
+    # Source file only uses serde - tokio/anyhow/thiserror are essential
+    cat > "$test_dir/src/main.rs" << 'EOF'
+use serde::Serialize;
+fn main() {}
+EOF
+
+    cd "$test_dir"
+    $BINARY autodd 2>&1 > /dev/null
+
+    local content=$(cat "$test_dir/Cargo.toml")
+    # Essential deps should remain even if not used
+    echo "$content" | grep -q "serde" && \
+    echo "$content" | grep -q "tokio" && \
+    echo "$content" | grep -q "anyhow" && \
+    echo "$content" | grep -q "thiserror" && \
+    # Non-essential unused dep should be removed
+    ! echo "$content" | grep -q "unused_crate"
+}
+
+# ============================================
 # Run all tests
 # ============================================
 echo -e "${BLUE}Running E2E tests...${NC}"
@@ -383,6 +620,11 @@ run_test "Debug mode output" test_debug_mode
 run_test "Report generation" test_report_generation
 run_test "Security check" test_security_check
 run_test "Workspace detection" test_workspace
+run_test "Imported names not treated as crates" test_imported_names
+run_test "Local modules not treated as crates" test_local_modules
+run_test "Complex multi-file project" test_complex_project
+run_test "Malformed config file error" test_malformed_config
+run_test "Essential deps preserved on update" test_essential_deps_preserved
 
 # ============================================
 # Summary

@@ -8,6 +8,7 @@ use toml_edit::DocumentMut;
 
 use crate::dependency_manager::updater::DependencyUpdater;
 use crate::models::CrateReference;
+use crate::utils::{get_deps_table, resolve_deps_table_path};
 
 pub struct DependencyReporter {
     project_root: PathBuf,
@@ -36,27 +37,8 @@ impl DependencyReporter {
         println!("\nDependency Usage Report");
         println!("=====================\n");
 
-        // Check if this is a workspace or a package
-        let is_workspace = doc.get("workspace").is_some();
-
-        // Determine the correct dependencies table (workspace or package)
-        let deps_path = if is_workspace {
-            "workspace.dependencies"
-        } else {
-            "dependencies"
-        };
-
-        // Get dependencies from the correct table
-        let deps = if deps_path.contains('.') {
-            // Handle nested table path like "workspace.dependencies"
-            let parts: Vec<&str> = deps_path.split('.').collect();
-            doc.get(parts[0])
-                .and_then(|t| t.as_table())
-                .and_then(|t| t.get(parts[1]))
-                .and_then(|t| t.as_table())
-        } else {
-            doc.get(deps_path).and_then(|t| t.as_table())
-        };
+        let deps_path = resolve_deps_table_path(&doc);
+        let deps = get_deps_table(&doc, deps_path);
 
         if let Some(deps) = deps {
             for (name, dep) in deps.iter() {
@@ -132,27 +114,8 @@ impl DependencyReporter {
         let doc = content.parse::<DocumentMut>()?;
         let mut outdated = Vec::new();
 
-        // Check if this is a workspace or a package
-        let is_workspace = doc.get("workspace").is_some();
-
-        // Determine the correct dependencies table (workspace or package)
-        let deps_path = if is_workspace {
-            "workspace.dependencies"
-        } else {
-            "dependencies"
-        };
-
-        // Get dependencies from the correct table
-        let deps = if deps_path.contains('.') {
-            // Handle nested table path like "workspace.dependencies"
-            let parts: Vec<&str> = deps_path.split('.').collect();
-            doc.get(parts[0])
-                .and_then(|t| t.as_table())
-                .and_then(|t| t.get(parts[1]))
-                .and_then(|t| t.as_table())
-        } else {
-            doc.get(deps_path).and_then(|t| t.as_table())
-        };
+        let deps_path = resolve_deps_table_path(&doc);
+        let deps = get_deps_table(&doc, deps_path);
 
         if let Some(deps) = deps {
             for (name, dep) in deps.iter() {
@@ -169,9 +132,20 @@ impl DependencyReporter {
     }
 
     pub fn check_version(&self, version: &str, latest: &str) -> Result<bool> {
-        let current = Version::parse(Self::strip_version_prefix(version))?;
-        let latest_ver = Version::parse(Self::strip_version_prefix(latest))?;
+        let current = Version::parse(&Self::normalize_version(version))?;
+        let latest_ver = Version::parse(&Self::normalize_version(latest))?;
         Ok(latest_ver > current)
+    }
+
+    /// Normalize a version string by stripping prefixes and padding missing components.
+    /// e.g. "^1.0" -> "1.0.0", "1" -> "1.0.0"
+    fn normalize_version(version: &str) -> String {
+        let stripped = Self::strip_version_prefix(version);
+        match stripped.matches('.').count() {
+            0 => format!("{stripped}.0.0"),
+            1 => format!("{stripped}.0"),
+            _ => stripped.to_string(),
+        }
     }
 
     /// Strip version requirement prefixes (^, ~, =, >=, <=, >, <)
@@ -350,11 +324,35 @@ tokio = "1.0"
     }
 
     #[test]
-    fn test_strip_version_prefix() {
-        // Test the private helper function behavior through check_version
-        // This test verifies that all prefixes are correctly handled
+    fn test_check_version_incomplete_semver() -> Result<()> {
+        let (temp_dir, _) = create_test_environment()?;
+        let reporter = DependencyReporter::new(temp_dir.path().to_path_buf());
 
-        // The function is private, so we test it indirectly
-        // through the check_version method which uses it
+        // Missing patch version: "1.0" vs "1.1.0"
+        assert!(reporter.check_version("1.0", "1.1.0")?);
+        assert!(!reporter.check_version("1.0", "1.0.0")?);
+
+        // Missing patch on both sides
+        assert!(reporter.check_version("1.0", "1.1")?);
+        assert!(!reporter.check_version("1.0", "1.0")?);
+
+        // With prefix and missing patch
+        assert!(reporter.check_version("^1.0", "1.1.0")?);
+        assert!(reporter.check_version("~1.0", "1.1")?);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_version_major_only() -> Result<()> {
+        let (temp_dir, _) = create_test_environment()?;
+        let reporter = DependencyReporter::new(temp_dir.path().to_path_buf());
+
+        // Major version only
+        assert!(reporter.check_version("1", "2.0.0")?);
+        assert!(!reporter.check_version("1", "1.0.0")?);
+        assert!(reporter.check_version("1", "1.0.1")?);
+
+        Ok(())
     }
 }

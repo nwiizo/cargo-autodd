@@ -25,10 +25,46 @@ struct CrateVersion {
     yanked: bool,
 }
 
+pub(crate) trait CrateRegistry {
+    fn get_latest_version(&self, crate_name: &str) -> Result<Option<String>>;
+}
+
+pub(crate) struct CratesIoRegistry;
+
+impl CrateRegistry for CratesIoRegistry {
+    fn get_latest_version(&self, crate_name: &str) -> Result<Option<String>> {
+        let url = format!("https://crates.io/api/v1/crates/{}", crate_name);
+        let response = ureq::get(&url).call();
+
+        match response {
+            Ok(res) => {
+                let reader = BufReader::new(res.into_reader());
+                let crates_io_data: CratesIoResponse = serde_json::from_reader(reader)?;
+
+                let latest_version = crates_io_data
+                    .versions
+                    .iter()
+                    .filter(|v| !v.yanked)
+                    .map(|v| Version::parse(&v.num))
+                    .filter_map(Result::ok)
+                    .max();
+
+                match latest_version {
+                    Some(v) => Ok(Some(format!("{}.{}.{}", v.major, v.minor, v.patch))),
+                    None => Ok(None),
+                }
+            }
+            Err(ureq::Error::Status(404, _)) => Ok(None),
+            Err(e) => Err(anyhow::anyhow!("Failed to fetch crate info: {}", e)),
+        }
+    }
+}
+
 pub struct DependencyUpdater {
     project_root: PathBuf,
     cargo_toml: PathBuf,
     debug: bool,
+    registry: Box<dyn CrateRegistry>,
 }
 
 impl DependencyUpdater {
@@ -38,6 +74,7 @@ impl DependencyUpdater {
             project_root,
             cargo_toml,
             debug: false,
+            registry: Box::new(CratesIoRegistry),
         }
     }
 
@@ -47,12 +84,27 @@ impl DependencyUpdater {
             project_root,
             cargo_toml,
             debug,
+            registry: Box::new(CratesIoRegistry),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_registry(project_root: PathBuf, registry: Box<dyn CrateRegistry>) -> Self {
+        let cargo_toml = project_root.join("Cargo.toml");
+        Self {
+            project_root,
+            cargo_toml,
+            debug: false,
+            registry,
         }
     }
 
     pub fn update_cargo_toml(&self, crate_refs: &HashMap<String, CrateReference>) -> Result<()> {
-        let content = fs::read_to_string(&self.cargo_toml)?;
-        let mut doc = content.parse::<DocumentMut>()?;
+        let content = fs::read_to_string(&self.cargo_toml)
+            .with_context(|| format!("Failed to read {}", self.cargo_toml.display()))?;
+        let mut doc = content
+            .parse::<DocumentMut>()
+            .with_context(|| format!("Failed to parse {} as TOML", self.cargo_toml.display()))?;
 
         // Check if this is a workspace or a package
         let is_workspace = doc.get("workspace").is_some();
@@ -153,7 +205,13 @@ impl DependencyUpdater {
                 .entry(deps_path)
                 .or_insert(toml_edit::table())
                 .as_table_mut()
-                .ok_or_else(|| anyhow::anyhow!("Failed to get dependencies table"))?;
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Failed to get {} table in {}",
+                        deps_path,
+                        self.cargo_toml.display()
+                    )
+                })?;
 
             // Add internal crate as path dependency
             let mut table = Table::new();
@@ -248,36 +306,12 @@ impl DependencyUpdater {
             }
         }
 
-        // Get the latest version from crates.io
-        let url = format!("https://crates.io/api/v1/crates/{}", crate_name);
-        let response = ureq::get(&url).call();
-
-        match response {
-            Ok(res) => {
-                let reader = BufReader::new(res.into_reader());
-                let crates_io_data: CratesIoResponse = serde_json::from_reader(reader)?;
-
-                // Find the latest non-yanked version
-                let latest_version = crates_io_data
-                    .versions
-                    .iter()
-                    .filter(|v| !v.yanked)
-                    .map(|v| Version::parse(&v.num))
-                    .filter_map(Result::ok)
-                    .max();
-
-                match latest_version {
-                    Some(v) => {
-                        // Include patch version for more accurate updates
-                        Ok(format!("{}.{}.{}", v.major, v.minor, v.patch))
-                    }
-                    None => Err(anyhow::anyhow!(
-                        "No valid versions found for {}",
-                        crate_name
-                    )),
-                }
-            }
-            Err(e) => Err(anyhow::anyhow!("Failed to fetch crate info: {}", e)),
+        match self.registry.get_latest_version(crate_name)? {
+            Some(v) => Ok(v),
+            None => Err(anyhow::anyhow!(
+                "No valid versions found for {}",
+                crate_name
+            )),
         }
     }
 
@@ -302,11 +336,17 @@ impl DependencyUpdater {
     }
 
     pub fn verify_dependencies(&self) -> Result<()> {
-        Command::new("cargo")
+        let status = Command::new("cargo")
             .current_dir(&self.project_root)
             .arg("check")
             .status()
             .context("Failed to run cargo check")?;
+        if !status.success() {
+            anyhow::bail!(
+                "cargo check failed with exit code: {}",
+                status.code().unwrap_or(-1)
+            );
+        }
         Ok(())
     }
 
@@ -323,8 +363,11 @@ impl DependencyUpdater {
 
     // New method to detect if the current Cargo.toml is a workspace
     pub fn is_workspace(&self) -> Result<bool> {
-        let content = fs::read_to_string(&self.cargo_toml)?;
-        let doc = content.parse::<DocumentMut>()?;
+        let content = fs::read_to_string(&self.cargo_toml)
+            .with_context(|| format!("Failed to read {}", self.cargo_toml.display()))?;
+        let doc = content
+            .parse::<DocumentMut>()
+            .with_context(|| format!("Failed to parse {} as TOML", self.cargo_toml.display()))?;
         Ok(doc.get("workspace").is_some())
     }
 
@@ -585,6 +628,147 @@ unused_crate = "0.1"
             Some("2.0.0".to_string())
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_verify_dependencies_missing_cargo_toml() {
+        let temp_dir = TempDir::new().unwrap();
+        let updater = DependencyUpdater::new(temp_dir.path().to_path_buf());
+        let result = updater.verify_dependencies();
+        assert!(
+            result.is_err(),
+            "verify_dependencies should fail without Cargo.toml"
+        );
+    }
+
+    #[test]
+    fn test_verify_dependencies_valid_project() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+
+        // Create a minimal valid Rust project
+        let cargo_toml = temp_dir.path().join("Cargo.toml");
+        let content = r#"[package]
+name = "test-verify"
+version = "0.1.0"
+edition = "2021"
+"#;
+        let mut file = File::create(&cargo_toml)?;
+        write!(file, "{}", content)?;
+
+        std::fs::create_dir(temp_dir.path().join("src"))?;
+        let main_rs = temp_dir.path().join("src/main.rs");
+        let mut file = File::create(main_rs)?;
+        write!(file, "fn main() {{}}")?;
+
+        let updater = DependencyUpdater::new(temp_dir.path().to_path_buf());
+        updater.verify_dependencies()?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_find_workspace_root_no_workspace() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        create_cargo_toml(&temp_dir);
+
+        let updater = DependencyUpdater::new(temp_dir.path().to_path_buf());
+        let root = updater.find_workspace_root()?;
+        assert_eq!(root, temp_dir.path().to_path_buf());
+        Ok(())
+    }
+
+    #[test]
+    fn test_find_workspace_root_with_workspace() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        create_workspace_cargo_toml(&temp_dir);
+
+        // Create a sub-crate directory
+        let sub_crate_dir = temp_dir.path().join("crate1");
+        std::fs::create_dir(&sub_crate_dir)?;
+        let sub_cargo_toml = sub_crate_dir.join("Cargo.toml");
+        let content = r#"[package]
+name = "crate1"
+version = "0.1.0"
+edition = "2021"
+"#;
+        let mut file = File::create(sub_cargo_toml)?;
+        write!(file, "{}", content)?;
+
+        let updater = DependencyUpdater::new(sub_crate_dir.clone());
+        let root = updater.find_workspace_root()?;
+        assert_eq!(root, temp_dir.path().to_path_buf());
+        Ok(())
+    }
+
+    struct MockRegistry {
+        versions: HashMap<String, String>,
+    }
+
+    impl CrateRegistry for MockRegistry {
+        fn get_latest_version(&self, crate_name: &str) -> Result<Option<String>> {
+            Ok(self.versions.get(crate_name).cloned())
+        }
+    }
+
+    #[test]
+    fn test_mock_registry_get_latest_version_success() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        create_cargo_toml(&temp_dir);
+
+        let mut versions = HashMap::new();
+        versions.insert("regex".to_string(), "1.10.0".to_string());
+        let registry = Box::new(MockRegistry { versions });
+
+        let updater = DependencyUpdater::with_registry(temp_dir.path().to_path_buf(), registry);
+        let version = updater.get_latest_version("regex")?;
+        assert_eq!(version, "1.10.0");
+        Ok(())
+    }
+
+    #[test]
+    fn test_mock_registry_get_latest_version_not_found() {
+        let temp_dir = TempDir::new().unwrap();
+        create_cargo_toml(&temp_dir);
+
+        let versions = HashMap::new();
+        let registry = Box::new(MockRegistry { versions });
+
+        let updater = DependencyUpdater::with_registry(temp_dir.path().to_path_buf(), registry);
+        let result = updater.get_latest_version("nonexistent_crate");
+        assert!(
+            result.is_err(),
+            "Should return error for crate not found in registry"
+        );
+    }
+
+    #[test]
+    fn test_mock_registry_update_cargo_toml_adds_dep() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        create_cargo_toml(&temp_dir);
+
+        let mut versions = HashMap::new();
+        versions.insert("regex".to_string(), "1.10.0".to_string());
+        let registry = Box::new(MockRegistry { versions });
+
+        let updater = DependencyUpdater::with_registry(temp_dir.path().to_path_buf(), registry);
+
+        let mut crate_refs = HashMap::new();
+        crate_refs.insert(
+            "serde".to_string(),
+            CrateReference::new("serde".to_string()),
+        );
+        let mut regex_ref = CrateReference::new("regex".to_string());
+        regex_ref.add_feature("unicode".to_string());
+        crate_refs.insert("regex".to_string(), regex_ref);
+
+        updater.update_cargo_toml(&crate_refs)?;
+
+        let content = fs::read_to_string(updater.cargo_toml)?;
+        assert!(content.contains("regex"), "regex should be added");
+        assert!(
+            content.contains("1.10.0"),
+            "regex version should be 1.10.0 from mock"
+        );
         Ok(())
     }
 }

@@ -1,10 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use regex::Regex;
-use toml_edit::{DocumentMut, Item};
+use syn::visit::{self, Visit};
+use syn::{Expr, ItemUse, UseTree};
+use toml_edit::{DocumentMut, Item as TomlItem};
 use walkdir::WalkDir;
 
 use crate::models::CrateReference;
@@ -33,7 +34,6 @@ impl DependencyAnalyzer {
     pub fn analyze_dependencies(&self) -> Result<HashMap<String, CrateReference>> {
         let mut crate_refs = HashMap::new();
         let mut dev_crate_refs = HashMap::new();
-        let extern_regex = Regex::new(r"^\s*extern\s+crate\s+([a-zA-Z_][a-zA-Z0-9_]*)")?;
 
         // Load internal crate information from existing Cargo.toml
         self.load_existing_dependencies(&mut crate_refs)?;
@@ -49,7 +49,11 @@ impl DependencyAnalyzer {
             }
 
             // Check if this is a test file (in tests/ directory or ends with _test.rs)
-            let is_test_file = path.to_string_lossy().contains("tests/")
+            let path_str = path.to_string_lossy();
+            let is_test_file = path_str.contains("/tests/")
+                || path_str.contains("\\tests\\")
+                || path_str.ends_with("/tests")
+                || path_str.ends_with("\\tests")
                 || path
                     .file_name()
                     .is_some_and(|f| f.to_string_lossy().ends_with("_test.rs"));
@@ -60,20 +64,10 @@ impl DependencyAnalyzer {
 
                 if is_test_file {
                     // Analyze as dev-dependency
-                    self.analyze_file(FileAnalysisContext {
-                        content: content.trim().to_string(),
-                        file_path: &file_path,
-                        extern_regex: &extern_regex,
-                        crate_refs: &mut dev_crate_refs,
-                    })?;
+                    self.analyze_file(&content, &file_path, &mut dev_crate_refs)?;
                 } else {
                     // Analyze as regular dependency
-                    self.analyze_file(FileAnalysisContext {
-                        content: content.trim().to_string(),
-                        file_path: &file_path,
-                        extern_regex: &extern_regex,
-                        crate_refs: &mut crate_refs,
-                    })?;
+                    self.analyze_file(&content, &file_path, &mut crate_refs)?;
                 }
             }
         }
@@ -182,7 +176,7 @@ impl DependencyAnalyzer {
 
                 match value {
                     // Path dependency (standard table format)
-                    Item::Table(table) => {
+                    TomlItem::Table(table) => {
                         if self.debug {
                             println!("Dependency {} is a table: {:?}", crate_name, table);
                         }
@@ -212,7 +206,7 @@ impl DependencyAnalyzer {
                         }
                     }
                     // Path dependency (inline table format)
-                    Item::Value(val) if val.is_inline_table() => {
+                    TomlItem::Value(val) if val.is_inline_table() => {
                         if self.debug {
                             println!("Dependency {} is an inline table: {:?}", crate_name, val);
                         }
@@ -259,244 +253,337 @@ impl DependencyAnalyzer {
         Ok(())
     }
 
-    fn analyze_file(&self, ctx: FileAnalysisContext) -> Result<()> {
-        let FileAnalysisContext {
-            content,
-            file_path,
-            extern_regex,
-            crate_refs,
-        } = ctx;
-
-        let lines: Vec<&str> = content.lines().collect();
-        let mut current_line_num = 0;
-
-        while current_line_num < lines.len() {
-            let line = lines[current_line_num].trim();
-            current_line_num += 1;
-
-            if line.is_empty() {
-                continue;
-            }
-
-            // Skip comment lines
-            if line.starts_with("//") || line.starts_with("/*") {
-                continue;
-            }
-
-            // Process use statements
-            if line.starts_with("use") {
-                // Collect multi-line use statements
-                let mut use_statement = line.to_string();
-                let mut brace_count = line.chars().filter(|&c| c == '{').count()
-                    - line.chars().filter(|&c| c == '}').count();
-
-                // Continue reading until all braces are closed
-                while brace_count > 0 && current_line_num < lines.len() {
-                    let next_line = lines[current_line_num].trim();
-                    current_line_num += 1;
-                    use_statement.push('\n');
-                    use_statement.push_str(next_line);
-
-                    brace_count += next_line.chars().filter(|&c| c == '{').count();
-                    brace_count -= next_line.chars().filter(|&c| c == '}').count();
-                }
-
-                // Extract crate names from use statement
-                self.extract_crates_from_use(&use_statement, crate_refs)?;
-                continue;
-            }
-
-            // Process extern crate statements
-            if let Some(cap) = extern_regex.captures(line) {
-                let crate_name = cap[1].to_string();
-                if !is_std_crate(&crate_name) {
-                    crate_refs
-                        .entry(crate_name.clone())
-                        .or_insert_with(|| CrateReference::new(crate_name))
-                        .add_usage(file_path.clone());
-                }
-            }
-        }
-
-        // Scan for direct references (e.g., serde_json::Value)
-        self.scan_for_direct_references(&content, crate_refs)?;
-
-        Ok(())
-    }
-
-    // Method to extract crate names from use statements
-    fn extract_crates_from_use(
-        &self,
-        use_statement: &str,
-        crate_refs: &mut HashMap<String, CrateReference>,
-    ) -> Result<()> {
-        // Remove comments
-        let clean_use = self.remove_comments(use_statement);
-
-        if self.debug {
-            println!("Cleaned use statement: {}", clean_use);
-        }
-
-        // Remove "use " prefix
-        let statement = clean_use.trim_start_matches("use").trim();
-
-        // Simple use statement (e.g., use serde::Serialize;)
-        if !statement.starts_with('{') && statement.contains("::") {
-            let parts: Vec<&str> = statement.split("::").collect();
-            if !parts.is_empty() {
-                let crate_name = parts[0].trim_end_matches(':').trim();
-                self.add_crate_if_valid(crate_name, crate_refs);
-            }
-        }
-        // Use statement with crate name and braces (e.g., use crate_name::{...};)
-        else if !statement.starts_with('{') && statement.contains("::") && statement.contains('{')
-        {
-            let parts: Vec<&str> = statement.split("::").collect();
-            if !parts.is_empty() {
-                let crate_name = parts[0].trim();
-                self.add_crate_if_valid(crate_name, crate_refs);
-            }
-        }
-        // Use statement with braces (e.g., use {crate1, crate2::module, crate3::{...}};)
-        else if statement.starts_with('{') {
-            // Extract content inside braces
-            let content = &statement[1..statement.rfind('}').unwrap_or(statement.len())];
-
-            // Process each item separated by commas
-            for item in content.split(',') {
-                let item = item.trim();
-                if item.is_empty() {
-                    continue;
-                }
-
-                // Item contains :: (e.g., crate::module or crate::{...})
-                if item.contains("::") {
-                    let parts: Vec<&str> = item.split("::").collect();
-                    if !parts.is_empty() {
-                        let crate_name = parts[0].trim();
-                        self.add_crate_if_valid(crate_name, crate_refs);
-                    }
-                }
-                // Simple crate name (e.g., crate)
-                else {
-                    let crate_name = item.trim();
-                    self.add_crate_if_valid(crate_name, crate_refs);
-                }
-            }
-        }
-        // Simple use statement (e.g., use tokio;)
-        else {
-            let crate_name = statement.trim_end_matches(';').trim();
-            self.add_crate_if_valid(crate_name, crate_refs);
-        }
-
-        Ok(())
-    }
-
-    // Helper method to add crate if it's valid
-    fn add_crate_if_valid(
-        &self,
-        crate_name: &str,
-        crate_refs: &mut HashMap<String, CrateReference>,
-    ) {
-        // Remove extra characters from crate name
-        let clean_name = crate_name.trim().trim_end_matches(['}', '\n', '\r', ':']);
-
-        if !clean_name.is_empty()
-            && !is_std_crate(clean_name)
-            && clean_name != "crate"
-            && clean_name != "self"
-            && clean_name != "super"
-        {
-            if self.debug {
-                println!("Found crate: {}", clean_name);
-            }
-
-            // Store the original name to preserve dashes/underscores
-            let original_name = clean_name.to_string();
-
-            crate_refs
-                .entry(original_name.clone())
-                .or_insert_with(|| CrateReference::new(original_name))
-                .add_usage(PathBuf::from(""));
-        }
-    }
-
-    // Helper method to remove comments
-    fn remove_comments(&self, code: &str) -> String {
-        let mut clean_code = String::new();
-        let mut in_line_comment = false;
-        let mut in_block_comment = false;
-        let mut i = 0;
-        let chars: Vec<char> = code.chars().collect();
-
-        while i < chars.len() {
-            if in_line_comment {
-                if chars[i] == '\n' {
-                    in_line_comment = false;
-                    clean_code.push('\n');
-                }
-                i += 1;
-                continue;
-            }
-
-            if in_block_comment {
-                if i + 1 < chars.len() && chars[i] == '*' && chars[i + 1] == '/' {
-                    in_block_comment = false;
-                    i += 2;
-                } else {
-                    i += 1;
-                }
-                continue;
-            }
-
-            if i + 1 < chars.len() && chars[i] == '/' && chars[i + 1] == '/' {
-                in_line_comment = true;
-                i += 2;
-                continue;
-            }
-
-            if i + 1 < chars.len() && chars[i] == '/' && chars[i + 1] == '*' {
-                in_block_comment = true;
-                i += 2;
-                continue;
-            }
-
-            clean_code.push(chars[i]);
-            i += 1;
-        }
-
-        clean_code
-    }
-
-    // Method to detect direct references in fully qualified paths
-    fn scan_for_direct_references(
+    fn analyze_file(
         &self,
         content: &str,
+        file_path: &PathBuf,
         crate_refs: &mut HashMap<String, CrateReference>,
     ) -> Result<()> {
-        // Use content with comments removed
-        let clean_content = self.remove_comments(content);
-
-        // Pattern for fully qualified paths (e.g., serde_json::value::Value)
-        let direct_ref_regex = Regex::new(r"([a-zA-Z_][a-zA-Z0-9_-]*)::([a-zA-Z0-9_:]+)")?;
-
-        for cap in direct_ref_regex.captures_iter(&clean_content) {
-            let potential_crate = &cap[1];
-            if !is_std_crate(potential_crate) {
-                self.add_crate_if_valid(potential_crate, crate_refs);
+        // Parse the Rust file using syn
+        let syntax = match syn::parse_file(content) {
+            Ok(syntax) => syntax,
+            Err(e) => {
+                if self.debug {
+                    eprintln!("Failed to parse {:?}: {}", file_path, e);
+                }
+                // If parsing fails, skip this file
+                return Ok(());
             }
-        }
+        };
+
+        // Pre-pass: collect local module declarations
+        let mut local_modules = HashSet::new();
+        let mut module_collector = ModuleCollector::new(&mut local_modules);
+        module_collector.visit_file(&syntax);
+
+        // First pass: collect crate names from use statements and track imported names with scope stack
+        let mut scope_stack = vec![HashSet::new()]; // Start with file-level scope
+        let mut first_pass_visitor = CrateVisitor {
+            crate_refs,
+            file_path,
+            debug: self.debug,
+            scope_stack: &mut scope_stack,
+            local_modules: &local_modules,
+        };
+        first_pass_visitor.visit_file(&syntax);
+
+        // Second pass: look for direct path references (like serde_json::Value)
+        // Reuse the same scope_stack so PathVisitor knows what was imported
+        let mut path_visitor = PathVisitor {
+            crate_refs,
+            file_path,
+            debug: self.debug,
+            scope_stack: &mut scope_stack,
+            local_modules: &local_modules,
+        };
+        path_visitor.visit_file(&syntax);
 
         Ok(())
     }
 }
 
-struct FileAnalysisContext<'a> {
-    content: String,
-    file_path: &'a PathBuf,
-    extern_regex: &'a Regex,
+/// Simple visitor to collect TOP-LEVEL module declarations only
+/// We only care about top-level modules because those are what can conflict
+/// with external crate names in use statements at the file level.
+struct ModuleCollector<'a> {
+    local_modules: &'a mut HashSet<String>,
+    depth: usize, // Track nesting depth
+}
+
+impl<'a> ModuleCollector<'a> {
+    fn new(local_modules: &'a mut HashSet<String>) -> Self {
+        Self {
+            local_modules,
+            depth: 0,
+        }
+    }
+}
+
+impl<'a> Visit<'a> for ModuleCollector<'a> {
+    fn visit_item_mod(&mut self, node: &'a syn::ItemMod) {
+        // Only collect top-level module declarations (depth == 0)
+        if self.depth == 0 {
+            let module_name = node.ident.to_string();
+            self.local_modules.insert(module_name);
+        }
+
+        // Visit nested content with increased depth
+        self.depth += 1;
+        visit::visit_item_mod(self, node);
+        self.depth -= 1;
+    }
+}
+
+/// AST visitor that extracts crate names from use statements and extern crate declarations
+/// Also tracks imported names with a scope stack to avoid false positives in direct reference scanning
+struct CrateVisitor<'a> {
     crate_refs: &'a mut HashMap<String, CrateReference>,
+    file_path: &'a PathBuf,
+    debug: bool,
+    scope_stack: &'a mut Vec<HashSet<String>>, // Stack of scopes, each containing imported names
+    local_modules: &'a HashSet<String>,
+}
+
+impl<'a> CrateVisitor<'a> {
+    fn add_crate(&mut self, crate_name: &str) {
+        // Filter out standard library crates and keywords
+        if is_std_crate(crate_name)
+            || crate_name == "crate"
+            || crate_name == "self"
+            || crate_name == "super"
+        {
+            return;
+        }
+
+        // Filter out local modules
+        if self.local_modules.contains(crate_name) {
+            return;
+        }
+
+        if self.debug {
+            println!("Found crate: {} in {:?}", crate_name, self.file_path);
+        }
+
+        self.crate_refs
+            .entry(crate_name.to_string())
+            .or_insert_with(|| CrateReference::new(crate_name.to_string()))
+            .add_usage(self.file_path.clone());
+    }
+
+    fn extract_crate_from_use_tree(&mut self, tree: &UseTree, is_root: bool) {
+        match tree {
+            UseTree::Path(path) => {
+                let segment = path.ident.to_string();
+
+                // The first segment is the crate name
+                if is_root {
+                    self.add_crate(&segment);
+                }
+
+                // Recursively visit the rest of the tree
+                self.extract_crate_from_use_tree(&path.tree, false);
+            }
+            UseTree::Name(name) => {
+                let name_str = name.ident.to_string();
+
+                // If this is at root level, it's both a crate and an imported name
+                // e.g., `use serde;` means serde is the crate AND the imported name
+                if is_root {
+                    self.add_crate(&name_str);
+                }
+
+                // Add to current scope
+                if let Some(current_scope) = self.scope_stack.last_mut() {
+                    current_scope.insert(name_str);
+                }
+            }
+            UseTree::Rename(rename) => {
+                let original = rename.ident.to_string();
+                let renamed_to = rename.rename.to_string();
+
+                // If this is at root level, the original is the crate name
+                // e.g., `use serde as s;` means serde is the crate, s is imported
+                if is_root {
+                    self.add_crate(&original);
+                }
+
+                // Add renamed name to current scope
+                if let Some(current_scope) = self.scope_stack.last_mut() {
+                    current_scope.insert(renamed_to);
+                }
+            }
+            UseTree::Glob(_) => {
+                // use foo::* - can't track specific names, but that's OK
+            }
+            UseTree::Group(group) => {
+                // use foo::{bar, baz} or use {foo, bar}
+                // Each item in the group inherits the root status
+                for tree in &group.items {
+                    self.extract_crate_from_use_tree(tree, is_root);
+                }
+            }
+        }
+    }
+}
+
+impl<'a> Visit<'a> for CrateVisitor<'a> {
+    fn visit_item_use(&mut self, node: &'a ItemUse) {
+        // Extract crate name from the use tree (is_root = true for top level)
+        self.extract_crate_from_use_tree(&node.tree, true);
+
+        // Continue visiting
+        visit::visit_item_use(self, node);
+    }
+
+    fn visit_item_extern_crate(&mut self, node: &'a syn::ItemExternCrate) {
+        // Extract crate name from extern crate declaration
+        let crate_name = node.ident.to_string();
+        self.add_crate(&crate_name);
+
+        // Track the imported name (it might be renamed) in current scope
+        let imported_name = if let Some((_, rename)) = &node.rename {
+            rename.to_string()
+        } else {
+            crate_name
+        };
+
+        if let Some(current_scope) = self.scope_stack.last_mut() {
+            current_scope.insert(imported_name);
+        }
+
+        // Continue visiting
+        visit::visit_item_extern_crate(self, node);
+    }
+
+    fn visit_item_fn(&mut self, node: &'a syn::ItemFn) {
+        self.scope_stack.push(HashSet::new());
+        visit::visit_item_fn(self, node);
+        self.scope_stack.pop();
+    }
+
+    fn visit_item_impl(&mut self, node: &'a syn::ItemImpl) {
+        self.scope_stack.push(HashSet::new());
+        visit::visit_item_impl(self, node);
+        self.scope_stack.pop();
+    }
+
+    fn visit_item_trait(&mut self, node: &'a syn::ItemTrait) {
+        self.scope_stack.push(HashSet::new());
+        visit::visit_item_trait(self, node);
+        self.scope_stack.pop();
+    }
+
+    fn visit_block(&mut self, node: &'a syn::Block) {
+        self.scope_stack.push(HashSet::new());
+        visit::visit_block(self, node);
+        self.scope_stack.pop();
+    }
+}
+
+/// AST visitor that extracts crate names from direct path expressions
+/// (e.g., serde_json::Value without a use statement)
+struct PathVisitor<'a> {
+    crate_refs: &'a mut HashMap<String, CrateReference>,
+    file_path: &'a PathBuf,
+    debug: bool,
+    scope_stack: &'a mut Vec<HashSet<String>>, // Stack of scopes, each containing imported names
+    local_modules: &'a HashSet<String>,
+}
+
+impl<'a> PathVisitor<'a> {
+    fn check_path(&mut self, path: &syn::Path) {
+        // Only interested in paths with at least 2 segments (crate::something)
+        if path.segments.len() < 2 {
+            return;
+        }
+
+        // Get the first segment
+        let first_segment = &path.segments[0].ident.to_string();
+
+        // Skip if it's a keyword
+        if first_segment == "crate" || first_segment == "self" || first_segment == "super" {
+            return;
+        }
+
+        // Skip if it's a standard library crate
+        if is_std_crate(first_segment) {
+            return;
+        }
+
+        // Skip if this name was imported in any scope in the current stack
+        // (it's not a crate, it's an import)
+        if self
+            .scope_stack
+            .iter()
+            .any(|scope| scope.contains(first_segment))
+        {
+            return;
+        }
+
+        // Skip if this is a local module (declared with mod foo;)
+        if self.local_modules.contains(first_segment) {
+            return;
+        }
+
+        // This looks like a direct crate reference
+        if self.debug {
+            println!(
+                "Found direct path reference: {} in {:?}",
+                first_segment, self.file_path
+            );
+        }
+
+        self.crate_refs
+            .entry(first_segment.clone())
+            .or_insert_with(|| CrateReference::new(first_segment.clone()))
+            .add_usage(self.file_path.clone());
+    }
+}
+
+impl<'a> Visit<'a> for PathVisitor<'a> {
+    fn visit_expr(&mut self, node: &'a Expr) {
+        // Check if this is a path expression
+        if let Expr::Path(expr_path) = node {
+            self.check_path(&expr_path.path);
+        }
+
+        // Continue visiting
+        visit::visit_expr(self, node);
+    }
+
+    fn visit_type(&mut self, node: &'a syn::Type) {
+        // Check if this is a path type
+        if let syn::Type::Path(type_path) = node {
+            self.check_path(&type_path.path);
+        }
+
+        // Continue visiting
+        visit::visit_type(self, node);
+    }
+
+    fn visit_item_fn(&mut self, node: &'a syn::ItemFn) {
+        self.scope_stack.push(HashSet::new());
+        visit::visit_item_fn(self, node);
+        self.scope_stack.pop();
+    }
+
+    fn visit_item_impl(&mut self, node: &'a syn::ItemImpl) {
+        self.scope_stack.push(HashSet::new());
+        visit::visit_item_impl(self, node);
+        self.scope_stack.pop();
+    }
+
+    fn visit_item_trait(&mut self, node: &'a syn::ItemTrait) {
+        self.scope_stack.push(HashSet::new());
+        visit::visit_item_trait(self, node);
+        self.scope_stack.pop();
+    }
+
+    fn visit_block(&mut self, node: &'a syn::Block) {
+        self.scope_stack.push(HashSet::new());
+        visit::visit_block(self, node);
+        self.scope_stack.pop();
+    }
 }
 
 #[cfg(test)]
@@ -661,14 +748,8 @@ fn main() {
         println!("\nStarting analysis...\n");
 
         let mut crate_refs = HashMap::new();
-        let extern_regex = Regex::new(r"^\s*extern\s+crate\s+([a-zA-Z_][a-zA-Z0-9_]*)")?;
 
-        analyzer.analyze_file(FileAnalysisContext {
-            content: content.trim().to_string(),
-            file_path: &file_path,
-            extern_regex: &extern_regex,
-            crate_refs: &mut crate_refs,
-        })?;
+        analyzer.analyze_file(content.trim(), &file_path, &mut crate_refs)?;
 
         println!("\nAnalysis complete. Found crates:");
         for (name, crate_ref) in &crate_refs {
@@ -701,14 +782,14 @@ fn main() {
         let content = r#"
         // Simple use statement
         use serde::Serialize;
-        
+
         // Braced use statement
         use {
             tokio::runtime::Runtime,
             reqwest::Client,
             anyhow::Result
         };
-        
+
         // Braced use with comments
         use {
             //serde_json::Value,
@@ -717,10 +798,10 @@ fn main() {
             chrono::DateTime */
             walkdir::WalkDir
         };
-        
+
         // Wildcard import
         use clap::*;
-        
+
         // Mixed imports
         use {
             std::fs,
@@ -733,14 +814,8 @@ fn main() {
         println!("\nStarting analysis...\n");
 
         let mut crate_refs = HashMap::new();
-        let extern_regex = Regex::new(r"^\s*extern\s+crate\s+([a-zA-Z_][a-zA-Z0-9_]*)")?;
 
-        analyzer.analyze_file(FileAnalysisContext {
-            content: content.to_string(),
-            file_path: &file_path,
-            extern_regex: &extern_regex,
-            crate_refs: &mut crate_refs,
-        })?;
+        analyzer.analyze_file(content, &file_path, &mut crate_refs)?;
 
         println!("\nAnalysis complete. Found crates:");
         for (name, crate_ref) in &crate_refs {
@@ -800,7 +875,7 @@ fn main() {
                 sync::{Mutex, RwLock}
             },
             // Commented section
-            /* 
+            /*
             rand::{
                 Rng,
                 distributions::Uniform
@@ -808,14 +883,14 @@ fn main() {
             */
             reqwest::{Client, Response}
         };
-        
+
         // Multiple lines with inline comments
         use clap::{ // Command line parser
             Command, // For creating commands
             Arg, // For defining arguments
             ArgMatches // For matching arguments
         };
-        
+
         // Mixed with standard library
         use {
             std::{
@@ -831,14 +906,8 @@ fn main() {
         println!("\nStarting analysis...\n");
 
         let mut crate_refs = HashMap::new();
-        let extern_regex = Regex::new(r"^\s*extern\s+crate\s+([a-zA-Z_][a-zA-Z0-9_]*)")?;
 
-        analyzer.analyze_file(FileAnalysisContext {
-            content: content.to_string(),
-            file_path: &file_path,
-            extern_regex: &extern_regex,
-            crate_refs: &mut crate_refs,
-        })?;
+        analyzer.analyze_file(content, &file_path, &mut crate_refs)?;
 
         println!("\nAnalysis complete. Found crates:");
         for (name, crate_ref) in &crate_refs {
@@ -1125,6 +1194,345 @@ fn main() {
         assert!(
             crate_refs.contains_key("regex"),
             "regex direct reference should be detected"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_imported_names_not_treated_as_crates() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+
+        // Create Cargo.toml
+        let cargo_toml_content = r#"
+[package]
+name = "test-package"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+"#;
+        let cargo_toml_path = temp_dir.path().join("Cargo.toml");
+        let mut file = File::create(&cargo_toml_path)?;
+        writeln!(file, "{}", cargo_toml_content)?;
+
+        // Create source file that imports bar from foo, then uses bar::something
+        fs::create_dir_all(temp_dir.path().join("src"))?;
+        let main_rs_path = temp_dir.path().join("src/main.rs");
+        let main_rs_content = r#"
+use foo::bar;
+use serde::Deserialize;
+
+fn main() {
+    // bar here is NOT a crate, it's the imported item from foo
+    let x = bar::something();
+
+    // Deserialize here is NOT a crate, it's imported from serde
+    let y = Deserialize::deserialize();
+
+    // But this IS a direct crate reference (no use statement for baz)
+    let z = baz::thing();
+}
+"#;
+        let mut file = File::create(main_rs_path)?;
+        writeln!(file, "{}", main_rs_content)?;
+
+        let analyzer = DependencyAnalyzer::new(temp_dir.path().to_path_buf());
+        let crate_refs = analyzer.analyze_dependencies()?;
+
+        // foo should be detected (from use foo::bar)
+        assert!(
+            crate_refs.contains_key("foo"),
+            "foo should be detected from use statement"
+        );
+
+        // serde should be detected (from use serde::Deserialize)
+        assert!(
+            crate_refs.contains_key("serde"),
+            "serde should be detected from use statement"
+        );
+
+        // baz should be detected (direct reference)
+        assert!(
+            crate_refs.contains_key("baz"),
+            "baz should be detected from direct reference"
+        );
+
+        // bar should NOT be detected as a crate (it's an import from foo)
+        assert!(
+            !crate_refs.contains_key("bar"),
+            "bar should NOT be detected as a crate - it's imported from foo"
+        );
+
+        // Deserialize should NOT be detected as a crate (it's an import from serde)
+        assert!(
+            !crate_refs.contains_key("Deserialize"),
+            "Deserialize should NOT be detected as a crate - it's imported from serde"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_local_modules_not_treated_as_crates() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+
+        // Create Cargo.toml
+        let cargo_toml_content = r#"
+[package]
+name = "test-package"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+"#;
+        let cargo_toml_path = temp_dir.path().join("Cargo.toml");
+        let mut file = File::create(&cargo_toml_path)?;
+        writeln!(file, "{}", cargo_toml_content)?;
+
+        // Create source file with local module declarations
+        fs::create_dir_all(temp_dir.path().join("src"))?;
+        let main_rs_path = temp_dir.path().join("src/main.rs");
+        let main_rs_content = r#"
+mod util;
+mod config;
+
+use util::strip_trailing_newline;
+use config::Settings;
+use external_crate::Thing;
+
+fn main() {
+    // util and config are local modules, not crates
+    util::helper();
+    config::load();
+
+    // external_crate IS a crate
+    external_crate::process();
+
+    // Default is a trait, should be filtered as std
+    let x = Foo { ..Default::default() };
+}
+"#;
+        let mut file = File::create(main_rs_path)?;
+        writeln!(file, "{}", main_rs_content)?;
+
+        let analyzer = DependencyAnalyzer::new(temp_dir.path().to_path_buf());
+        let crate_refs = analyzer.analyze_dependencies()?;
+
+        // external_crate should be detected
+        assert!(
+            crate_refs.contains_key("external_crate"),
+            "external_crate should be detected"
+        );
+
+        // util should NOT be detected as a crate (it's a local module)
+        assert!(
+            !crate_refs.contains_key("util"),
+            "util should NOT be detected as a crate - it's a local module"
+        );
+
+        // config should NOT be detected as a crate (it's a local module)
+        assert!(
+            !crate_refs.contains_key("config"),
+            "config should NOT be detected as a crate - it's a local module"
+        );
+
+        // Default should NOT be detected (it's filtered as std trait)
+        assert!(
+            !crate_refs.contains_key("Default"),
+            "Default should NOT be detected - it's a std trait"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_nested_modules_dont_conflict() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+
+        // Create Cargo.toml
+        let cargo_toml_content = r#"
+[package]
+name = "test-package"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+"#;
+        let cargo_toml_path = temp_dir.path().join("Cargo.toml");
+        let mut file = File::create(&cargo_toml_path)?;
+        writeln!(file, "{}", cargo_toml_content)?;
+
+        // Create source file with nested module that has same name as external crate
+        fs::create_dir_all(temp_dir.path().join("src"))?;
+        let main_rs_path = temp_dir.path().join("src/main.rs");
+        let main_rs_content = r#"
+// Top-level local module
+mod util;
+
+mod parent {
+    // Nested module named "bar" - should NOT conflict with external bar crate
+    mod bar {
+        pub fn helper() {}
+    }
+}
+
+// This "bar" is an external crate, NOT the nested mod bar
+use bar::Thing;
+
+fn main() {
+    // External crate reference
+    bar::external_function();
+
+    // Top-level local module should still be filtered
+    util::helper();
+}
+"#;
+        let mut file = File::create(main_rs_path)?;
+        writeln!(file, "{}", main_rs_content)?;
+
+        let analyzer = DependencyAnalyzer::new(temp_dir.path().to_path_buf());
+        let crate_refs = analyzer.analyze_dependencies()?;
+
+        // bar should be detected (external crate, nested mod bar doesn't conflict)
+        assert!(
+            crate_refs.contains_key("bar"),
+            "bar should be detected as external crate (nested mod bar shouldn't conflict)"
+        );
+
+        // util should NOT be detected (top-level module)
+        assert!(
+            !crate_refs.contains_key("util"),
+            "util should NOT be detected - it's a top-level local module"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_scoped_use_statements() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+
+        // Create Cargo.toml
+        let cargo_toml_content = r#"
+[package]
+name = "test-package"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+"#;
+        let cargo_toml_path = temp_dir.path().join("Cargo.toml");
+        let mut file = File::create(&cargo_toml_path)?;
+        writeln!(file, "{}", cargo_toml_content)?;
+
+        // Create source file with scoped use statements
+        fs::create_dir_all(temp_dir.path().join("src"))?;
+        let main_rs_path = temp_dir.path().join("src/main.rs");
+        let main_rs_content = r#"
+fn foo() {
+    // Import Serialize from serde in this scope
+    use serde::Serialize;
+
+    // This uses the imported Serialize, not a crate
+    Serialize::something();
+}
+
+fn bar() {
+    // In this scope, Serialize is a different crate
+    // because the use above is scoped to foo()
+    use Serialize::Thing;
+
+    // This should detect "Serialize" as an external crate
+    Serialize::other_thing();
+}
+
+fn baz() {
+    // Nested scopes
+    {
+        use inner::Data;
+        Data::method();
+    }
+
+    // outer scope - inner is not imported here
+    use inner::Other;
+    inner::function();
+}
+"#;
+        let mut file = File::create(main_rs_path)?;
+        writeln!(file, "{}", main_rs_content)?;
+
+        let analyzer = DependencyAnalyzer::new(temp_dir.path().to_path_buf());
+        let crate_refs = analyzer.analyze_dependencies()?;
+
+        // serde should be detected from use serde::Serialize
+        assert!(
+            crate_refs.contains_key("serde"),
+            "serde should be detected from scoped use"
+        );
+
+        // Serialize should be detected as a crate in bar() function
+        assert!(
+            crate_refs.contains_key("Serialize"),
+            "Serialize should be detected as external crate in bar()"
+        );
+
+        // inner should be detected from both uses
+        assert!(
+            crate_refs.contains_key("inner"),
+            "inner should be detected as external crate"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_sibling_scopes_same_name() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+
+        // Create Cargo.toml
+        let cargo_toml_content = r#"
+[package]
+name = "test-package"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+"#;
+        let cargo_toml_path = temp_dir.path().join("Cargo.toml");
+        let mut file = File::create(&cargo_toml_path)?;
+        writeln!(file, "{}", cargo_toml_content)?;
+
+        // Create source file where the same name means different things in sibling scopes
+        fs::create_dir_all(temp_dir.path().join("src"))?;
+        let main_rs_path = temp_dir.path().join("src/main.rs");
+        let main_rs_content = r#"
+fn test1() {
+    use foo::bar;  // bar is imported from foo
+    bar::thing();  // uses the imported bar
+}
+
+fn test2() {
+    use bar::baz;  // bar is a crate here!
+    bar::other();  // uses bar crate
+}
+"#;
+        let mut file = File::create(main_rs_path)?;
+        writeln!(file, "{}", main_rs_content)?;
+
+        let analyzer = DependencyAnalyzer::new(temp_dir.path().to_path_buf());
+        let crate_refs = analyzer.analyze_dependencies()?;
+
+        // foo should be detected from first scope
+        assert!(
+            crate_refs.contains_key("foo"),
+            "foo should be detected from first scope"
+        );
+
+        // bar should be detected as a crate from second scope
+        assert!(
+            crate_refs.contains_key("bar"),
+            "bar should be detected as a crate from second scope (different bar)"
         );
 
         Ok(())

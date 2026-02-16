@@ -1,85 +1,85 @@
 use anyhow::Result;
 use cargo_autodd::CargoAutodd;
-use clap::{App, Arg, SubCommand};
+use clap::{Parser, Subcommand};
 use std::env;
+use std::path::PathBuf;
+
+#[derive(Parser)]
+#[command(
+    name = "cargo-autodd",
+    version,
+    about = "Automatically manages dependencies in your Rust projects"
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Analyze and update dependencies
+    Autodd(AutoddArgs),
+}
+
+#[derive(clap::Args)]
+struct AutoddArgs {
+    /// Enable debug output
+    #[arg(short, long)]
+    debug: bool,
+
+    /// Preview changes without modifying files
+    #[arg(long)]
+    dry_run: bool,
+
+    /// Path to config file (default: .cargo-autodd.toml)
+    #[arg(short, long, value_name = "FILE")]
+    config: Option<PathBuf>,
+
+    #[command(subcommand)]
+    subcommand: Option<AutoddSubcommand>,
+}
+
+#[derive(Subcommand)]
+enum AutoddSubcommand {
+    /// Update dependencies to latest versions
+    Update,
+    /// Generate dependency usage report
+    Report,
+    /// Check for security vulnerabilities
+    Security,
+}
 
 fn main() -> Result<()> {
-    let matches = App::new("cargo-autodd")
-        .version(env!("CARGO_PKG_VERSION"))
-        .about("Automatically manages dependencies in your Rust projects")
-        .subcommand(
-            SubCommand::with_name("autodd")
-                .about("Analyze and update dependencies")
-                .arg(
-                    Arg::with_name("debug")
-                        .short("d")
-                        .long("debug")
-                        .help("Enable debug output"),
-                )
-                .arg(
-                    Arg::with_name("dry-run")
-                        .long("dry-run")
-                        .help("Preview changes without modifying files"),
-                )
-                .arg(
-                    Arg::with_name("config")
-                        .short("c")
-                        .long("config")
-                        .value_name("FILE")
-                        .help("Path to config file (default: .cargo-autodd.toml)"),
-                )
-                .subcommand(
-                    SubCommand::with_name("update").about("Update dependencies to latest versions"),
-                )
-                .subcommand(
-                    SubCommand::with_name("report").about("Generate dependency usage report"),
-                )
-                .subcommand(
-                    SubCommand::with_name("security").about("Check for security vulnerabilities"),
-                ),
-        )
-        .get_matches();
+    let cli = Cli::parse();
 
-    // When cargo-autodd is called directly (not as a cargo subcommand)
-    if env::args().nth(1) != Some("autodd".to_string()) {
-        println!("This command should be run as 'cargo autodd'");
-        std::process::exit(1);
-    }
+    let Commands::Autodd(args) = cli.command;
 
-    // Get the autodd subcommand matches
-    let autodd_matches = matches.subcommand_matches("autodd").unwrap_or_else(|| {
-        println!("Missing 'autodd' subcommand. Run 'cargo autodd --help' for usage information.");
-        std::process::exit(1);
-    });
-
-    let debug = autodd_matches.is_present("debug");
-    let dry_run = autodd_matches.is_present("dry-run");
     let current_dir = env::current_dir()?;
 
     // Load config
-    let config = if let Some(config_path) = autodd_matches.value_of("config") {
-        cargo_autodd::Config::load(std::path::Path::new(config_path))?
+    let config = if let Some(config_path) = &args.config {
+        cargo_autodd::Config::load(config_path)?
     } else {
         cargo_autodd::Config::load_default(&current_dir)?
     };
 
-    let autodd = CargoAutodd::with_options(current_dir, debug, dry_run, config);
+    let autodd = CargoAutodd::with_options(current_dir, args.debug, args.dry_run, config);
 
     // Handle subcommands
-    match autodd_matches.subcommand_name() {
-        Some("update") => {
+    match args.subcommand {
+        Some(AutoddSubcommand::Update) => {
             println!("Updating dependencies to latest versions...");
             autodd.update_dependencies()?;
         }
-        Some("report") => {
+        Some(AutoddSubcommand::Report) => {
             println!("Generating dependency usage report...");
             autodd.generate_report()?;
         }
-        Some("security") => {
+        Some(AutoddSubcommand::Security) => {
             println!("Checking for security vulnerabilities...");
             autodd.check_security()?;
         }
-        _ => {
+        None => {
             // Default behavior: analyze and update
             autodd.analyze_and_update()?;
         }
