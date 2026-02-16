@@ -160,7 +160,11 @@ impl DependencyUpdater {
 
         // Add new dependencies
         for crate_ref in deps_map.values() {
-            if !existing_deps.contains(&crate_ref.name) {
+            // Check if dependency exists by comparing normalized names (hyphens → underscores)
+            let exists = existing_deps
+                .iter()
+                .any(|dep| dep.replace('-', "_") == crate_ref.name);
+            if !exists {
                 self.add_dependency(doc, crate_ref, deps_path)?;
             }
         }
@@ -172,7 +176,10 @@ impl DependencyUpdater {
             .collect::<HashSet<_>>();
         let to_remove = existing_deps
             .iter()
-            .filter(|dep| !used_deps.contains(*dep) && !is_essential_dep(dep))
+            .filter(|dep| {
+                let normalized = dep.replace('-', "_");
+                !used_deps.contains(&normalized) && !is_essential_dep(dep)
+            })
             .cloned()
             .collect::<Vec<_>>();
 
@@ -697,6 +704,100 @@ edition = "2021"
         let updater = DependencyUpdater::new(sub_crate_dir.clone());
         let root = updater.find_workspace_root()?;
         assert_eq!(root, temp_dir.path().to_path_buf());
+        Ok(())
+    }
+
+    #[test]
+    fn test_hyphenated_crate_not_duplicated() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+
+        // Cargo.toml has hyphenated name "serde-json"
+        let path = temp_dir.path().join("Cargo.toml");
+        let content = r#"
+[package]
+name = "test-package"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = "1.0"
+serde-json = "1.0"
+"#;
+        let mut file = File::create(&path)?;
+        writeln!(file, "{}", content)?;
+
+        let updater = DependencyUpdater::new(temp_dir.path().to_path_buf());
+        let mut crate_refs = HashMap::new();
+
+        // Analyzer detects "serde_json" (underscore form from Rust code)
+        crate_refs.insert(
+            "serde".to_string(),
+            CrateReference::new("serde".to_string()),
+        );
+        crate_refs.insert(
+            "serde_json".to_string(),
+            CrateReference::new("serde_json".to_string()),
+        );
+
+        updater.update_cargo_toml(&crate_refs)?;
+
+        let result = fs::read_to_string(&path)?;
+        // serde-json should NOT be duplicated as serde_json
+        let serde_json_count =
+            result.matches("serde-json").count() + result.matches("serde_json").count();
+        assert_eq!(
+            serde_json_count, 1,
+            "serde-json should appear exactly once, not be duplicated: {}",
+            result
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_hyphenated_crate_not_removed_when_used() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+
+        // Cargo.toml has hyphenated name "serde-json"
+        let path = temp_dir.path().join("Cargo.toml");
+        let content = r#"
+[package]
+name = "test-package"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = "1.0"
+serde-json = "1.0"
+my-utils = "0.5"
+"#;
+        let mut file = File::create(&path)?;
+        writeln!(file, "{}", content)?;
+
+        let updater = DependencyUpdater::new(temp_dir.path().to_path_buf());
+        let mut crate_refs = HashMap::new();
+
+        // Analyzer detects underscore forms from Rust code
+        crate_refs.insert(
+            "serde".to_string(),
+            CrateReference::new("serde".to_string()),
+        );
+        crate_refs.insert(
+            "serde_json".to_string(),
+            CrateReference::new("serde_json".to_string()),
+        );
+        // my-utils is not used
+
+        updater.update_cargo_toml(&crate_refs)?;
+
+        let result = fs::read_to_string(&path)?;
+        assert!(
+            result.contains("serde-json"),
+            "serde-json should be preserved (used as serde_json)"
+        );
+        assert!(
+            !result.contains("my-utils") && !result.contains("my_utils"),
+            "my-utils should be removed (unused)"
+        );
         Ok(())
     }
 
