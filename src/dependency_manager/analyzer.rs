@@ -300,8 +300,6 @@ impl DependencyAnalyzer {
 
         Ok(())
     }
-
-
 }
 
 /// Simple visitor to collect TOP-LEVEL module declarations only
@@ -309,7 +307,7 @@ impl DependencyAnalyzer {
 /// with external crate names in use statements at the file level.
 struct ModuleCollector<'a> {
     local_modules: &'a mut HashSet<String>,
-    depth: usize,  // Track nesting depth
+    depth: usize, // Track nesting depth
 }
 
 impl<'a> ModuleCollector<'a> {
@@ -342,7 +340,7 @@ struct CrateVisitor<'a> {
     crate_refs: &'a mut HashMap<String, CrateReference>,
     file_path: &'a PathBuf,
     debug: bool,
-    scope_stack: &'a mut Vec<HashSet<String>>,  // Stack of scopes, each containing imported names
+    scope_stack: &'a mut Vec<HashSet<String>>, // Stack of scopes, each containing imported names
     local_modules: &'a HashSet<String>,
 }
 
@@ -488,7 +486,7 @@ struct PathVisitor<'a> {
     crate_refs: &'a mut HashMap<String, CrateReference>,
     file_path: &'a PathBuf,
     debug: bool,
-    scope_stack: &'a mut Vec<HashSet<String>>,  // Stack of scopes, each containing imported names
+    scope_stack: &'a mut Vec<HashSet<String>>, // Stack of scopes, each containing imported names
     local_modules: &'a HashSet<String>,
 }
 
@@ -514,7 +512,11 @@ impl<'a> PathVisitor<'a> {
 
         // Skip if this name was imported in any scope in the current stack
         // (it's not a crate, it's an import)
-        if self.scope_stack.iter().any(|scope| scope.contains(first_segment)) {
+        if self
+            .scope_stack
+            .iter()
+            .any(|scope| scope.contains(first_segment))
+        {
             return;
         }
 
@@ -525,7 +527,10 @@ impl<'a> PathVisitor<'a> {
 
         // This looks like a direct crate reference
         if self.debug {
-            println!("Found direct path reference: {} in {:?}", first_segment, self.file_path);
+            println!(
+                "Found direct path reference: {} in {:?}",
+                first_segment, self.file_path
+            );
         }
 
         self.crate_refs
